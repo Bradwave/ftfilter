@@ -3,6 +3,14 @@ class SignalComponent {
         this.freq = freq;
         this.amp = amp;
         this.id = Math.random().toString(36).substr(2, 9);
+        // Real Mode Params
+        this.startTime = 0;   // In seconds
+        this.endTime = 5.0;   // Max duration (N=2048, Rate=256 -> 8s cap)
+        this.envelopeType = 'gaussian'; // 'gaussian' or 'adsr'
+        this.envelopeParams = {
+            gaussian: { center: 0.5, width: 0.2 }, 
+            adsr: { a: 0.1, d: 0.1, s: 0.5, r: 0.2 } 
+        };
     }
 }
 
@@ -14,11 +22,20 @@ const state = {
     ],
     filterCenter: 5, // Hz
     filterWidth: 4,  // Hz
-    timeBase: 2,     // Seconds shown
+    // timeBase: 2,     // Samples per second - REMOVED
     sampleRate: 256, // Samples per second
     isDraggingFilter: false,
     showAxis: true,
-    smoothing: 0
+    smoothing: 0,
+    signalMode: 'ideal', // 'ideal' or 'real'
+    filterType: 'square', // 'square' or 'gaussian'
+    audioMultiplier: 50, // Scaling factor
+    // New zoom/pan state
+    zoomStart: 0, // Start time of the visible window in seconds
+    zoomEnd: 5,   // End time of the visible window in seconds
+    isDragging: false, // For canvas pan interaction
+    dragStartX: 0,     // Mouse X position when drag started
+    dragStartTime: 0,  // Time at zoomStart when drag started
 };
 
 const elements = {
@@ -33,6 +50,8 @@ const elements = {
     smoothingSlider: document.getElementById('smoothing-slider'),
     axisToggle: document.getElementById('axis-toggle'),
     resetBtn: document.getElementById('reset-btn'),
+    audioMultSlider: document.getElementById('audio-mult-slider'),
+    audioMultDisplay: document.getElementById('audio-mult-display'),
     canvases: {
         signal: document.getElementById('signal-canvas'),
         freq: document.getElementById('frequency-canvas'),
@@ -46,14 +65,49 @@ elements.ctx.signal = elements.canvases.signal.getContext('2d');
 elements.ctx.freq = elements.canvases.freq.getContext('2d');
 elements.ctx.recon = elements.canvases.recon.getContext('2d');
 
-const STORAGE_KEY = 'ftfilter_state_v1';
+const STORAGE_KEY = 'ftfilter_state_v2';
+let audioCtx = null;
+let currentSource = null;
+let isPlaying = null; 
+let lastFilteredFFT = null;
+let audioStartTime = 0; // New variable for sync
 
 function init() {
     loadState();
+    updateToggleUI();
     renderComponentsUI();
     setupListeners();
     animate();
 }
+
+function updateToggleUI() {
+    const ideal = document.getElementById('mode-ideal');
+    const real = document.getElementById('mode-real');
+    if(ideal && real) {
+        ideal.className = state.signalMode === 'ideal' ? 'segmented-option active' : 'segmented-option';
+        real.className = state.signalMode === 'real' ? 'segmented-option active' : 'segmented-option';
+    }
+    
+    const square = document.getElementById('filter-square');
+    const gaussian = document.getElementById('filter-gaussian');
+    if(square && gaussian) {
+        square.className = state.filterType === 'square' ? 'segmented-option active' : 'segmented-option';
+        gaussian.className = state.filterType === 'gaussian' ? 'segmented-option active' : 'segmented-option';
+    }
+}
+
+window.setSignalMode = (mode) => {
+    state.signalMode = mode;
+    updateToggleUI();
+    renderComponentsUI();
+    saveState();
+};
+
+window.setFilterType = (type) => {
+    state.filterType = type;
+    updateToggleUI();
+    saveState();
+};
 
 function saveState() {
     const saved = {
@@ -62,7 +116,10 @@ function saveState() {
         filterWidth: state.filterWidth,
         timeBase: state.timeBase,
         showAxis: state.showAxis,
-        smoothing: state.smoothing
+        smoothing: state.smoothing,
+        signalMode: state.signalMode,
+        filterType: state.filterType,
+        audioMultiplier: state.audioMultiplier
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 }
@@ -75,6 +132,11 @@ function loadState() {
             state.components = parsed.components.map(c => {
                 const n = new SignalComponent(c.freq, c.amp);
                 n.id = c.id; 
+                // Restore new params
+                if(c.startTime !== undefined) n.startTime = c.startTime;
+                if(c.endTime !== undefined) n.endTime = c.endTime;
+                if(c.envelopeType) n.envelopeType = c.envelopeType;
+                if(c.envelopeParams) n.envelopeParams = c.envelopeParams;
                 return n;
             });
             state.filterCenter = parsed.filterCenter;
@@ -82,33 +144,46 @@ function loadState() {
             state.timeBase = parsed.timeBase;
             state.showAxis = parsed.showAxis;
             state.smoothing = parsed.smoothing || 0;
+            state.signalMode = parsed.signalMode || 'ideal';
+            state.filterType = parsed.filterType || 'square';
+            state.audioMultiplier = parsed.audioMultiplier || 50;
             
             // Sync UI inputs
             elements.filterCenterSlider.value = state.filterCenter;
             elements.filterWidthSlider.value = state.filterWidth;
-            elements.timeBaseSlider.value = state.timeBase;
+            // timeBaseSlider removed
             elements.axisToggle.checked = state.showAxis;
             elements.smoothingSlider.value = state.smoothing;
             elements.filterCenterDisplay.innerText = state.filterCenter.toFixed(1) + " Hz";
+            if(elements.audioMultSlider) {
+                elements.audioMultSlider.value = state.audioMultiplier;
+                elements.audioMultDisplay.innerText = state.audioMultiplier;
+            }
         } catch(e) { console.error("Failed to load state", e); }
     }
 }
 
 function setupListeners() {
-    // Collapsible (Same as before)
-    elements.componentsToggle.addEventListener('click', () => {
-        const content = elements.componentsWrapper;
-        const icon = elements.componentsToggle.querySelector('.dropdown-icon');
-        content.classList.toggle('expanded');
-        if (content.classList.contains('expanded')) {
-            icon.style.transform = "rotate(0deg)";
-        } else {
-            icon.style.transform = "rotate(-90deg)";
-        }
+    // Generic Collapsible Logic
+    document.querySelectorAll('.section-header-collapsible').forEach(header => {
+        header.addEventListener('click', () => {
+            const targetId = header.getAttribute('data-target');
+            const content = targetId ? document.getElementById(targetId) : null;
+            if (!content) return;
+            
+            const icon = header.querySelector('.dropdown-icon');
+            content.classList.toggle('expanded');
+            
+            if (content.classList.contains('expanded')) {
+                icon.style.transform = "rotate(0deg)";
+            } else {
+                icon.style.transform = "rotate(-90deg)";
+            }
+        });
     });
 
     elements.addComponentBtn.addEventListener('click', () => {
-        state.components.push(new SignalComponent(10, 0.5));
+        state.components.push(new SignalComponent(1, 1.0, 0.0, 'sine', true));
         renderComponentsUI();
         saveState();
     });
@@ -129,35 +204,34 @@ function setupListeners() {
         saveState();
     });
 
-    elements.timeBaseSlider.addEventListener('input', (e) => {
-        state.timeBase = parseFloat(e.target.value);
-        saveState();
-    });
-
     elements.smoothingSlider.addEventListener('input', (e) => {
         state.smoothing = parseFloat(e.target.value);
         saveState();
     });
 
+    if (elements.audioMultSlider) {
+        elements.audioMultSlider.addEventListener('input', (e) => {
+            state.audioMultiplier = parseInt(e.target.value);
+            elements.audioMultDisplay.innerText = state.audioMultiplier;
+            saveState();
+        });
+    }
+
     elements.resetBtn.addEventListener('click', () => {
-        // Clear local storage completely
         localStorage.removeItem(STORAGE_KEY);
-        
-        // Reset state to default
+        // Reset Logic
         state.components = [
-            new SignalComponent(2, 1.0),
-            new SignalComponent(5, 0.5)
+            new SignalComponent(1, 1.0, 0.0, 'sine', true)
         ];
         state.filterCenter = 5;
-        state.filterWidth = 4;
-        state.timeBase = 2;
+        state.filterWidth = 2;
+        state.zoomStart = 0;
+        state.zoomEnd = 5;
         state.showAxis = true;
         state.smoothing = 0;
         
-        // Sync Inputs
         elements.filterCenterSlider.value = 5;
-        elements.filterWidthSlider.value = 4;
-        elements.timeBaseSlider.value = 2;
+        elements.filterWidthSlider.value = 2;
         elements.axisToggle.checked = true;
         elements.smoothingSlider.value = 0;
         elements.filterCenterDisplay.innerText = "5.0 Hz";
@@ -166,23 +240,20 @@ function setupListeners() {
     });
 
     // Interaction on frequency canvas (freqCanvas logic remains the same)
-    const freqCanvas = elements.canvases.freq;
+    const freqCanvas = elements.canvases.freq; 
     
     freqCanvas.addEventListener('mousedown', (e) => {
         const rect = freqCanvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const width = rect.width; // Use rect width, not canvas width (resolution) for calc
+        const width = rect.width; 
         
-        // Map x to frequency
         const maxFreq = state.sampleRate / 2;
         const clickedFreq = (x / width) * maxFreq;
 
-        // Check if clicked near window
         const halfWidth = state.filterWidth / 2;
         if (clickedFreq >= state.filterCenter - halfWidth && clickedFreq <= state.filterCenter + halfWidth) {
             state.isDraggingFilter = true;
         } else {
-             // Jump to position
              state.filterCenter = clickedFreq;
              state.isDraggingFilter = true;
              updateFilterUI();
@@ -199,12 +270,10 @@ function setupListeners() {
         const maxFreq = state.sampleRate / 2;
         let newFreq = (x / width) * maxFreq;
         
-        // Clamp
         newFreq = Math.max(0, Math.min(newFreq, maxFreq));
         
         state.filterCenter = newFreq;
         updateFilterUI();
-        // Don't save on every move, maybe on mouseup
     });
 
     window.addEventListener('mouseup', () => {
@@ -222,10 +291,16 @@ function updateFilterUI() {
 
 function renderComponentsUI() {
     elements.componentsContainer.innerHTML = '';
+    
+    // Determine max time for sliders (4s default)
+    const MAX_DURATION = 5.0;
+
     state.components.forEach((comp, index) => {
         const el = document.createElement('div');
         el.className = 'component-row';
-        el.innerHTML = `
+        
+        // Base Controls
+        let html = `
             <div class="component-header">
                 <span>WAVE ${index + 1}</span>
                 <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
@@ -255,14 +330,245 @@ function renderComponentsUI() {
                 <div class="component-preview-wrapper">
                     <canvas id="preview-${comp.id}" width="100" height="28" style="width: 100%; height: 100%; display: block;"></canvas>
                 </div>
-            </div>
         `;
+
+        // Real Mode Extensions
+        if (state.signalMode === 'real') {
+             html += `
+                <!-- Time Constraints -->
+                <div style="margin-top: 8px;">
+                    <div class="component-label" id="time-label-${comp.id}">
+                        TIME CONSTRAINT (${comp.startTime.toFixed(2)}s - ${comp.endTime.toFixed(2)}s)
+                    </div>
+                    <div class="double-slider-wrapper">
+                        <div class="double-slider-track"></div>
+                        <div class="double-slider-fill" style="left: ${(comp.startTime/MAX_DURATION)*100}%; width: ${((comp.endTime-comp.startTime)/MAX_DURATION)*100}%"></div>
+                        <input type="range" class="double-slider-input" min="0" max="${MAX_DURATION}" step="0.1" value="${comp.startTime}" 
+                            oninput="updateTimeConstraint('${comp.id}', 'start', this.value)">
+                        <input type="range" class="double-slider-input" min="0" max="${MAX_DURATION}" step="0.1" value="${comp.endTime}" 
+                            oninput="updateTimeConstraint('${comp.id}', 'end', this.value)">
+                    </div>
+                </div>
+
+                <!-- Envelope Section -->
+                <div class="envelope-section">
+                    <div class="envelope-header">
+                         <span class="component-label">ENVELOPE</span>
+                         <div class="segmented-control" style="margin: 0; width: 120px; transform: scale(0.9);">
+                            <div class="segmented-option ${comp.envelopeType==='gaussian'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
+                            <div class="segmented-option ${comp.envelopeType==='adsr'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
+                        </div>
+                    </div>
+                    
+                    <canvas class="envelope-preview" id="env-prev-${comp.id}" width="200" height="80"></canvas>
+                    
+                    <div class="envelope-params">
+                        ${getEnvelopeControls(comp)}
+                    </div>
+                </div>
+             `;
+        }
+
+        html += `</div>`; // Close component-body
+        el.innerHTML = html;
         elements.componentsContainer.appendChild(el);
         
-        // Draw Preview
-        const previewCanvas = document.getElementById(`preview-${comp.id}`);
-        drawComponentPreview(previewCanvas, comp);
+        // Draw Previews
+        drawComponentPreview(document.getElementById(`preview-${comp.id}`), comp);
+        if (state.signalMode === 'real') {
+            drawEnvelopePreview(document.getElementById(`env-prev-${comp.id}`), comp);
+        }
     });
+}
+
+function getEnvelopeControls(comp) {
+    if (comp.envelopeType === 'gaussian') {
+        const p = comp.envelopeParams.gaussian;
+        return `
+            <div class="param-col span-2">
+                <input type="range" min="0" max="1" step="0.01" value="${p.center}" oninput="updateEnvParam('${comp.id}', 'gaussian', 'center', this.value)">
+                <span class="param-label">CENTER</span>
+            </div>
+            <div class="param-col span-2">
+                <input type="range" min="0.05" max="0.5" step="0.01" value="${p.width}" oninput="updateEnvParam('${comp.id}', 'gaussian', 'width', this.value)">
+                <span class="param-label">WIDTH</span>
+            </div>
+        `;
+    } else {
+        // ADSR
+        const p = comp.envelopeParams.adsr;
+        return `
+            <div class="param-col">
+                <input type="range" min="0" max="1" step="0.01" value="${p.a}" oninput="updateEnvParam('${comp.id}', 'adsr', 'a', this.value)">
+                <span class="param-label">A</span>
+            </div>
+            <div class="param-col">
+                <input type="range" min="0" max="1" step="0.01" value="${p.d}" oninput="updateEnvParam('${comp.id}', 'adsr', 'd', this.value)">
+                <span class="param-label">D</span>
+            </div>
+             <div class="param-col">
+                <input type="range" min="0" max="1" step="0.01" value="${p.s}" oninput="updateEnvParam('${comp.id}', 'adsr', 's', this.value)">
+                <span class="param-label">S</span>
+            </div>
+            <div class="param-col">
+                <input type="range" min="0" max="1" step="0.01" value="${p.r}" oninput="updateEnvParam('${comp.id}', 'adsr', 'r', this.value)">
+                <span class="param-label">R</span>
+            </div>
+        `;
+    }
+}
+
+// Logic Helpers
+window.updateTimeConstraint = (id, type, value) => {
+    const comp = state.components.find(c => c.id === id);
+    if(!comp) return;
+    
+    value = parseFloat(value);
+    
+    // Pushing Logic: allow start to push end, and vice versa
+    if (type === 'start') {
+        if (value >= comp.endTime) {
+            // Push end time forward
+            comp.endTime = Math.min(value + 0.1, 5.0); // MAX_DURATION 5.0 hardcoded here
+            // If hit max duration, clamp start value to maintain diff
+            if (comp.endTime === 5.0) {
+                 if (value > 4.9) value = 4.9;
+            }
+        }
+        comp.startTime = value;
+    } else {
+        // End slider
+        if (value <= comp.startTime) {
+            // Push start time back
+            comp.startTime = Math.max(value - 0.1, 0);
+            // If hit min duration, clamp end value
+            if (comp.startTime === 0) {
+                 if (value < 0.1) value = 0.1;
+            }
+        }
+        comp.endTime = value; 
+    }
+    
+    // OPTIMIZED UPDATE: Do NOT re-render UI. Update elements manually.
+    const previewCanvas = document.getElementById(`preview-${comp.id}`);
+    if (previewCanvas) {
+         const wrapper = previewCanvas.closest('.component-body');
+         if (wrapper) {
+             const trackFill = wrapper.querySelector('.double-slider-fill');
+             const inputs = wrapper.querySelectorAll('.double-slider-input');
+             
+             // Update Fill
+             const MAX = 5.0;
+             const left = (comp.startTime / MAX) * 100;
+             const width = ((comp.endTime - comp.startTime) / MAX) * 100;
+             if(trackFill) {
+                 trackFill.style.left = left + '%';
+                 trackFill.style.width = width + '%';
+             }
+             
+             // Update Input Values if pushed (sync sibling)
+             if (inputs.length === 2) {
+                 if (type === 'start') inputs[1].value = comp.endTime;
+                 else inputs[0].value = comp.startTime;
+             }
+             
+             // Update Label Text
+             const label = document.getElementById(`time-label-${comp.id}`);
+             if (label) {
+                 label.innerHTML = `TIME CONSTRAINT (${comp.startTime.toFixed(2)}s - ${comp.endTime.toFixed(2)}s)`;
+             }
+         }
+    }
+    saveState();
+};
+
+window.setEnvelopeType = (id, type) => {
+    const comp = state.components.find(c => c.id === id);
+    if(comp) {
+        comp.envelopeType = type;
+        renderComponentsUI();
+        saveState();
+    }
+};
+
+window.updateEnvParam = (id, type, param, value) => {
+    const comp = state.components.find(c => c.id === id);
+    if(comp) {
+        comp.envelopeParams[type][param] = parseFloat(value);
+        saveState();
+        drawEnvelopePreview(document.getElementById(`env-prev-${id}`), comp);
+    }
+};
+
+function drawEnvelopePreview(canvas, comp) {
+    if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    // Resize check standard
+    const rect = canvas.getBoundingClientRect();
+    if(canvas.width !== Math.round(rect.width * dpr)) {
+         canvas.width = Math.round(rect.width * dpr);
+         canvas.height = Math.round(rect.height * dpr);
+    }
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+    
+    const w = rect.width;
+    const h = rect.height;
+    ctx.clearRect(0, 0, w, h);
+    
+    // Grid/Guide
+    ctx.beginPath();
+    ctx.strokeStyle = '#eee';
+    // ctx.setLineDash([4, 4]); // Removed dashes
+    ctx.moveTo(0, h); ctx.lineTo(w, h); 
+    ctx.moveTo(0, 0); ctx.lineTo(w, 0); 
+    ctx.stroke();
+    // ctx.setLineDash([]);
+    
+    ctx.beginPath();
+    ctx.strokeStyle = '#1484e6';
+    ctx.lineWidth = 2;
+    
+    const samples = 100;
+    for(let i=0; i<=samples; i++) {
+        const tNorm = i / samples; // 0 to 1 across the active duration
+        const val = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+        
+        const x = tNorm * w;
+        const y = h - (val * h * 0.9) - 2; // Margin
+        
+        if (i===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+function getEnvelopeValue(tNorm, type, params) {
+    if (type === 'gaussian') {
+        const p = params.gaussian;
+        const num = Math.pow(tNorm - p.center, 2);
+        const den = 2 * Math.pow(p.width, 2);
+        return Math.exp(-num / den);
+    } else {
+        const p = params.adsr;
+        const t = tNorm; // alias
+        if (t < p.a) {
+            return t / p.a;
+        } 
+        else if (t < p.a + p.d) {
+            const tDec = t - p.a;
+            const prog = tDec / p.d;
+            return 1 - prog * (1 - p.s);
+        }
+        else if (t < 1.0 - p.r) {
+            return p.s;
+        }
+        else {
+            const tRel = t - (1.0 - p.r);
+            const prog = tRel / p.r;
+            return Math.max(0, p.s * (1 - prog));
+        }
+    }
 }
 
 function drawComponentPreview(canvas, comp) {
@@ -383,30 +689,44 @@ function animate() {
     
     Object.values(elements.canvases).forEach(canvas => {
         const rect = canvas.parentElement.getBoundingClientRect();
+        const ctx = canvas.getContext('2d');
         // Check if resize needed
         if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
             canvas.width = Math.round(rect.width * dpr);
             canvas.height = Math.round(rect.height * dpr);
-            // We do NOT set style.width/height here as resizing depends on parent (100% css)
-            // But we must reset context scale
-             const ctx = canvas.getContext('2d');
-             ctx.resetTransform(); // clear old scale
-             ctx.scale(dpr, dpr);
         }
+        // Always reset and scale to avoid drift
+        ctx.resetTransform();
+        ctx.scale(dpr, dpr);
     });
 
     // 1. Generate Signal
-    const N = 1024; 
+    const N = 2048; 
     const signalData = [];
     const timeData = [];
 
     for (let i = 0; i < N; i++) {
         const t = i / state.sampleRate;
         let val = 0;
+        
         state.components.forEach(comp => {
-            val += comp.amp * Math.cos(2 * Math.PI * comp.freq * t);
+            let compVal = comp.amp * Math.cos(2 * Math.PI * comp.freq * t);
+            
+            if (state.signalMode === 'real') {
+                if (t < comp.startTime || t > comp.endTime) {
+                    compVal = 0;
+                } else {
+                    const duration = comp.endTime - comp.startTime;
+                    if (duration > 0.01) {
+                        const tNorm = (t - comp.startTime) / duration;
+                        const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                        compVal *= env;
+                    }
+                }
+            }
+            val += compVal;
         });
-        signalData.push({ re: val, im: 0 }); // Complex for FFT
+        signalData.push({ re: val, im: 0 }); 
         timeData.push({ t, val });
     }
 
@@ -426,23 +746,48 @@ function animate() {
         
         freqs.push({ f: absF, mag }); 
 
-        const inWindow = absF >= (state.filterCenter - state.filterWidth/2) && 
-                         absF <= (state.filterCenter + state.filterWidth/2);
+        let response = 0;
         
-        if (inWindow) {
-            filteredFFT.push(fftData[k]);
+        if (state.filterType === 'square') {
+             if (absF >= (state.filterCenter - state.filterWidth/2) && 
+                 absF <= (state.filterCenter + state.filterWidth/2)) {
+                 response = 1;
+             }
         } else {
-            filteredFFT.push({ re: 0, im: 0 });
+            // Gaussian: Sigma = Width / 4
+            const sigma = Math.max(0.1, state.filterWidth / 4); 
+            const num = Math.pow(absF - state.filterCenter, 2);
+            const den = 2 * Math.pow(sigma, 2);
+            response = Math.exp(-num / den);
         }
+
+        filteredFFT.push({ 
+            re: fftData[k].re * response, 
+            im: fftData[k].im * response 
+        });
     }
 
     // 4. Compute Inverse FFT
     const reconstructedData = ifft(filteredFFT);
+
+    // Capture for Audio
+    lastFilteredFFT = filteredFFT;
     
     const reconPlotData = reconstructedData.map((c, i) => ({
         t: i / state.sampleRate,
         val: c.re 
     }));
+
+    // Audio Playback Time Sync
+    let pbTimeOriginal = null;
+    let pbTimeRecon = null;
+    if (isPlaying && audioCtx) {
+        const t = audioCtx.currentTime - audioStartTime;
+        if (t <= 5.0) { // Max duration
+             if (isPlaying === 'original') pbTimeOriginal = t;
+             else if (isPlaying === 'reconstructed') pbTimeRecon = t;
+        }
+    }
 
     // 5. Apply Smoothing (to visual data only)
     if (state.smoothing > 0) {
@@ -451,10 +796,10 @@ function animate() {
     }
 
     // 6. Draw
-    drawSignal(elements.ctx.signal, timeData, false);
+    drawSignalNew(elements.ctx.signal, timeData, false, pbTimeOriginal);
     drawSpectrum(elements.ctx.freq, freqs, N);
     
-    drawSignal(elements.ctx.recon, reconPlotData, true);
+    drawSignalNew(elements.ctx.recon, reconPlotData, true, pbTimeRecon);
 }
 
 function smoothData(data, factor) {
@@ -583,52 +928,67 @@ function drawSpectrum(ctx, data, N) {
     // Axis
     drawAxis(ctx, maxFreq, 1, 'Hz');
 
-    // Filter Overlay
-    const centerX = (state.filterCenter / maxFreq) * w;
-    const widthX = (state.filterWidth / maxFreq) * w;
-    
-    // Draw Window
-    ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
-    ctx.fillRect(centerX - widthX/2, 0, widthX, h); // No translate for rect fill usually better
-    
-    ctx.translate(0.5, 0.5);
+    // Draw Window/Filter shape
+    ctx.beginPath();
     ctx.strokeStyle = 'rgba(20, 132, 230, 0.5)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(centerX - widthX/2, 0, widthX, h);
     
+    if (state.filterType === 'square') {
+         const centerX = (state.filterCenter / maxFreq) * w;
+         const widthX = (state.filterWidth / maxFreq) * w;
+         ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
+         ctx.fillRect(centerX - widthX/2, 0, widthX, h); 
+         // Align stroke
+         ctx.translate(0.5, 0.5);
+         ctx.strokeRect(centerX - widthX/2, 0, widthX, h);
+         ctx.translate(-0.5, -0.5);
+    } else {
+        // Draw Gaussian Curve
+        ctx.translate(0.5, 0.5);
+        ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
+        ctx.moveTo(0, h);
+        
+        for(let x=0; x<=w; x+=2) { 
+             const f = (x / w) * maxFreq;
+             const sigma = Math.max(0.1, state.filterWidth / 4);
+             const num = Math.pow(f - state.filterCenter, 2);
+             const den = 2 * Math.pow(sigma, 2);
+             const resp = Math.exp(-num / den);
+             const y = h - (resp * h);
+             ctx.lineTo(x, y);
+        }
+        ctx.lineTo(w, h);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.translate(-0.5, -0.5);
+    }
+
     // Draw Magnitude Bars
     ctx.beginPath();
     const barWidth = w / (N/2);
-    
-    // Scale Magnitude Logic:
-    // Max theoretical magnitude for sine of amplitude A is (A * N) / 2.
-    // We visualize sum of components. Max amp sum approx 5? 
-    // Normalized Mag = mag / (N/2). This gives back the amplitude A.
-    // If we want Amplitude A=1 to be substantial height, say 1/5th of screen half?
-    // Let's say max Axis Amplitude is 5.
-    // screen H corresponds to 2 * MaxAxisAmp? No, FFT is usually 0 to Max.
-    // Let's scale so that Amplitude = 2.0 takes up 80% height.
-    
     const normalization = (N/2);
-    const maxVisibleAmp = 2.5; // If amp is 2.5, it hits top
+    const maxVisibleAmp = 2.5; 
     
     for (let i = 0; i < plotData.length; i++) {
         const d = plotData[i];
         const x = (d.f / maxFreq) * w;
         
-        // Normalized Amplitude
         const amp = d.mag / normalization;
-        
-        // Map 0..maxVisibleAmp to 0..h
         const barH = (amp / maxVisibleAmp) * h;
         
-        const inWindow = d.f >= (state.filterCenter - state.filterWidth/2) && 
+        let inWindow = false;
+        if(state.filterType === 'square') {
+             inWindow = d.f >= (state.filterCenter - state.filterWidth/2) && 
                          d.f <= (state.filterCenter + state.filterWidth/2);
+        } else {
+             // Visual threshold for Gaussian
+             const sigma = Math.max(0.1, state.filterWidth / 4);
+             const resp = Math.exp(-Math.pow(d.f - state.filterCenter, 2) / (2*sigma*sigma));
+             inWindow = resp > 0.1;
+        }
         
         ctx.fillStyle = inWindow ? '#1484e6' : '#bbb'; 
-        
-        // Draw bar 
-        // Use fillRect generally, translate doesn't affect it much unless stroked
         ctx.fillRect(x, h - barH, Math.max(1, barWidth - 0.5), barH);
     }
     
@@ -636,4 +996,426 @@ function drawSpectrum(ctx, data, N) {
 }
 
 // Start
+// init(); <-- Moving init to end after audio functions
+
+// Audio Logic ----------------------------------------------------
+
+window.toggleAudio = (type) => {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+
+    // Capture previous state BEFORE stop
+    const wasPlayingType = isPlaying;
+    
+    // Stop if currently playing
+    if (isPlaying) {
+        stopAudio();
+    }
+    
+    // If we just stopped the same type, return (toggle off)
+    if (wasPlayingType === type) {
+        return; 
+    }
+    
+    // Start New
+    isPlaying = type;
+    updatePlayButtons();
+    
+    const buffer = generateAudioBuffer(type);
+    
+    currentSource = audioCtx.createBufferSource();
+    currentSource.buffer = buffer;
+    currentSource.connect(audioCtx.destination);
+    
+    // Set Start Time
+    audioStartTime = audioCtx.currentTime;
+    
+    currentSource.onended = () => {
+        // Only if we are still the registered player (avoids race condition)
+        if (isPlaying === type) { 
+            isPlaying = null;
+            updatePlayButtons();
+        }
+    };
+    currentSource.start();
+};
+
+function stopAudio() {
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e){}
+        currentSource = null;
+    }
+    isPlaying = null;
+    updatePlayButtons();
+}
+
+function updatePlayButtons() {
+    const btnOrig = document.getElementById('btn-play-original');
+    const btnRecon = document.getElementById('btn-play-recon');
+    
+    if(btnOrig) {
+        btnOrig.classList.remove('playing');
+        const s = btnOrig.querySelector('span');
+        if(s) s.innerText = 'play_arrow';
+    }
+    if(btnRecon) {
+        btnRecon.classList.remove('playing');
+        const s = btnRecon.querySelector('span');
+        if(s) s.innerText = 'play_arrow';
+    }
+    
+    if (isPlaying === 'original' && btnOrig) {
+        btnOrig.classList.add('playing');
+        const s = btnOrig.querySelector('span');
+        if(s) s.innerText = 'stop';
+    }
+    if (isPlaying === 'reconstructed' && btnRecon) {
+        btnRecon.classList.add('playing');
+        const s = btnRecon.querySelector('span');
+        if(s) s.innerText = 'stop';
+    }
+}
+
+function generateAudioBuffer(type) {
+    const duration = 5.0; // Fixed duration
+    const sr = audioCtx.sampleRate;
+    const totalSamples = sr * duration;
+    const buffer = audioCtx.createBuffer(1, totalSamples, sr);
+    const data = buffer.getChannelData(0);
+    
+    const K = state.audioMultiplier;
+    
+    if (type === 'original') {
+        for (let i = 0; i < totalSamples; i++) {
+            const t = i / sr; // Audio Time
+            let val = 0;
+            state.components.forEach(comp => {
+                let compVal = comp.amp * Math.cos(2 * Math.PI * (comp.freq * K) * t);
+                
+                if (state.signalMode === 'real') {
+                   if (t < comp.startTime || t > comp.endTime) {
+                       compVal = 0;
+                   } else {
+                       const dur = comp.endTime - comp.startTime;
+                       if (dur > 0.01) {
+                            const tNorm = (t - comp.startTime) / dur;
+                            compVal *= getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                       }
+                   }
+                }
+                val += compVal;
+            });
+            data[i] = Math.tanh(val * 0.5); 
+        }
+    } else {
+        if (!lastFilteredFFT) return buffer;
+        const N = lastFilteredFFT.length;
+        const significantBins = [];
+        for(let k=0; k<N; k++) {
+             const mag = Math.sqrt(lastFilteredFFT[k].re**2 + lastFilteredFFT[k].im**2);
+             if (mag > 0.01) {
+                 let f = k * state.sampleRate / N;
+                 if (k > N/2) f = (k - N) * state.sampleRate / N;
+                 f = Math.abs(f);
+                 significantBins.push({ f: f * K, re: lastFilteredFFT[k].re / (N/2), im: lastFilteredFFT[k].im / (N/2) }); 
+             }
+        }
+        
+        for (let i = 0; i < totalSamples; i++) {
+            const t = i / sr;
+            let val = 0;
+            for (let b = 0; b < significantBins.length; b++) {
+                 const bin = significantBins[b];
+                 const angle = 2 * Math.PI * bin.f * t;
+                 val += bin.re * Math.cos(angle) - bin.im * Math.sin(angle); 
+            }
+             data[i] = Math.tanh(val * 0.5);
+        }
+    }
+    return buffer;
+}
+
+
+function drawSignalNew(ctx, data, isRecon, pbTime = null) {
+    const currentDPR = window.devicePixelRatio || 1;
+    const w = ctx.canvas.width / currentDPR;
+    const h = ctx.canvas.height / currentDPR;
+    
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+    
+    // Zoom/Pan State
+    const tStart = state.zoomStart;
+    const tEnd = state.zoomEnd;
+    const tRange = tEnd - tStart;
+    
+    // Safety
+    if (tRange <= 0.0001) return;
+
+    // Scale Y (Fixed or Dynamic)
+    const maxPossibleAmp = 5; 
+    const scaleY = (h / 2 - 20) / maxPossibleAmp; 
+
+    // Axis
+    // We need a smart axis drawer that knows about start/end
+    drawAxisNew(ctx, tStart, tEnd, maxPossibleAmp, 's');
+    
+    // Grid alignment
+    ctx.translate(0.5, 0.5);
+
+    // Center Line
+    ctx.strokeStyle = '#eee';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h/2);
+    ctx.lineTo(w, h/2);
+    ctx.stroke();
+
+    if (!data || data.length === 0) {
+        ctx.translate(-0.5, -0.5);
+        return;
+    }
+
+    ctx.beginPath();
+    ctx.strokeStyle = isRecon ? '#1484e6' : '#1a1a1a';
+    ctx.lineWidth = 2; 
+    ctx.lineJoin = 'round';
+
+    // Optimization: Find start index
+    // Data is sorted by time usually? Yes, generated sequentially.
+    // dt = 5 / 2048 typically. 
+    // We can just iterate or binary search. Iteration is fast enough for 2048 points.
+    
+    let started = false;
+    for (let i = 0; i < data.length; i++) {
+        const pt = data[i];
+        if (pt.t < tStart - 0.1) continue; // Margin
+        if (pt.t > tEnd + 0.1) break;      // Margin
+        
+        const x = ((pt.t - tStart) / tRange) * w;
+        const y = h/2 - pt.val * scaleY;
+        
+        if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+        } else {
+            ctx.lineTo(x, y);
+        }
+    }
+    ctx.stroke();
+
+    // Playback Line
+    if (pbTime !== null && pbTime >= tStart && pbTime <= tEnd) {
+        const x = ((pbTime - tStart) / tRange) * w;
+        ctx.beginPath();
+        ctx.strokeStyle = '#000'; 
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+    }
+    
+    ctx.translate(-0.5, -0.5);
+}
+
+function drawAxisNew(ctx, tStart, tEnd, yMax, unit) {
+     if (!state.showAxis) return;
+     const currentDPR = window.devicePixelRatio || 1;
+     const w = ctx.canvas.width / currentDPR;
+     const h = ctx.canvas.height / currentDPR;
+     
+     ctx.strokeStyle = '#ddd';
+     ctx.fillStyle = '#999';
+     ctx.font = '10px Space Mono';
+     ctx.lineWidth = 1;
+     ctx.textAlign = 'center';
+     
+     ctx.translate(0.5, 0.5);
+     
+     const range = tEnd - tStart;
+     const numNotches = 5;
+     
+     for (let i=0; i<=numNotches; i++) {
+         const t = tStart + (i/numNotches)*range;
+         const x = (i/numNotches)*w;
+         
+         ctx.beginPath();
+         ctx.moveTo(x, h);
+         ctx.lineTo(x, h-5);
+         ctx.stroke();
+         
+         ctx.fillText(t.toFixed(2), x, h-8);
+         // Skip y-axis labels for now to keep clean
+     }
+     ctx.translate(-0.5, -0.5);
+}
+
+function setupCanvasInteractions(canvas) {
+    if(!canvas) return;
+    
+    // Mouse
+    canvas.addEventListener('mousedown', startDrag);
+    window.addEventListener('mousemove', drag);
+    window.addEventListener('mouseup', endDrag);
+    
+    // Touch
+    canvas.addEventListener('touchstart', (e) => startDrag(e.touches[0]));
+    window.addEventListener('touchmove', (e) => drag(e.touches[0]));
+    window.addEventListener('touchend', endDrag);
+
+    // Wheel (Zoom)
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    
+    function startDrag(e) {
+        // Only if target is canvas
+        if (e.target !== canvas && e instanceof MouseEvent) return; 
+        // For touch, e is Touch object which doesn't have target same way?
+        // Actually e.target is fine.
+        
+        state.isDragging = true;
+        const rect = canvas.getBoundingClientRect();
+        state.dragStartX = (e.clientX - rect.left);
+        state.dragStartTime = state.zoomStart;
+        state.dragRange = state.zoomEnd - state.zoomStart;
+        state.dragLastX = state.dragStartX; 
+    }
+    
+    function drag(e) {
+        if (!state.isDragging) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const w = rect.width;
+        
+        const dxPixels = x - state.dragLastX;
+        state.dragLastX = x;
+        
+        const range = state.zoomEnd - state.zoomStart;
+        // pixelToTime = range / w
+        const dt = -(dxPixels / w) * range;
+        
+        let newStart = state.zoomStart + dt;
+        let newEnd = state.zoomEnd + dt;
+        
+        // Clamp 0..5
+        if (newStart < 0) {
+             newStart = 0;
+             newEnd = range;
+        }
+        if (newEnd > 5) {
+             newEnd = 5;
+             newStart = 5 - range;
+        }
+        
+        state.zoomStart = newStart;
+        state.zoomEnd = newEnd;
+    }
+    
+    function endDrag() {
+        state.isDragging = false;
+    }
+    
+    function handleWheel(e) {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const w = rect.width;
+        
+        const tHover = state.zoomStart + (mouseX / w) * (state.zoomEnd - state.zoomStart);
+        
+        const zoomSpeed = 0.1;
+        const factor = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed);
+        
+        let newRange = (state.zoomEnd - state.zoomStart) * factor;
+        
+        // Clamp Range
+        if (newRange < 0.1) newRange = 0.1;
+        if (newRange > 5.0) newRange = 5.0;
+        
+        // Adjust start/end to keep tHover fixed
+        const ratio = (mouseX / w);
+        let newStart = tHover - newRange * ratio;
+        let newEnd = tHover + newRange * (1 - ratio);
+        
+        // Clamp Boundary
+        if (newStart < 0) {
+            newStart = 0;
+            newEnd = newRange;
+        }
+        if (newEnd > 5) {
+            newEnd = 5;
+            newStart = 5 - newRange;
+        }
+        state.zoomStart = newStart;
+        state.zoomEnd = newEnd;
+        updateDisplaySliders(); // Sync UI
+    }
+}
+
+// Global Display Slider Logic
+window.updateDisplaySegment = (type, value) => {
+    value = parseFloat(value);
+    const MAX = 5.0;
+    
+    if (type === 'start') {
+        if (value >= state.zoomEnd) {
+             state.zoomEnd = Math.min(value + 0.1, MAX);
+             if (state.zoomEnd === MAX) {
+                 if (value > MAX - 0.1) value = MAX - 0.1;
+             }
+        }
+        state.zoomStart = value;
+    } else {
+        if (value <= state.zoomStart) {
+             state.zoomStart = Math.max(value - 0.1, 0);
+             if (state.zoomStart === 0) {
+                 if (value < 0.1) value = 0.1;
+             }
+        }
+        state.zoomEnd = value;
+    }
+    
+    // Sync UI visually (fill, label, other slider)
+    updateDisplaySliders();
+};
+
+function updateDisplaySliders() {
+    const startInput = document.getElementById('display-start-input');
+    const endInput = document.getElementById('display-end-input');
+    const fill = document.getElementById('display-segment-fill');
+    const label = document.getElementById('display-segment-label');
+    
+    if (startInput && endInput && fill && label) {
+        // Update input values if they aren't the focused element (avoid jitter while dragging)
+        if (document.activeElement !== startInput) startInput.value = state.zoomStart;
+        if (document.activeElement !== endInput) endInput.value = state.zoomEnd;
+        
+        const MAX = 5.0;
+        const left = (state.zoomStart / MAX) * 100;
+        const width = ((state.zoomEnd - state.zoomStart) / MAX) * 100;
+        
+        fill.style.left = left + '%';
+        fill.style.width = width + '%';
+        
+        label.innerText = `Display Segment (${state.zoomStart.toFixed(2)}s - ${state.zoomEnd.toFixed(2)}s)`;
+    }
+}
+
+function init() {
+    setupCanvasInteractions(elements.canvases.signal);
+    setupCanvasInteractions(elements.canvases.recon);
+    
+    loadState();
+    updateToggleUI();
+    renderComponentsUI();
+    setupListeners();
+    updateDisplaySliders(); // Init Sync
+    
+    animate();
+}
+
 init();

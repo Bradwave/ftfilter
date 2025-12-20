@@ -20,21 +20,43 @@
                 <p>Signal analysis & filtering</p>
             </header>
 
-            <!-- Filter Settings (Moved to Top) -->
-            <div class="section-title" style="margin-top: 12px;">Filter Settings</div>
-            <div class="control-group">
-                <div class="control-label">Window Width (Hz)</div>
-                <input type="range" id="filter-width-slider" min="1" max="50" value="5" step="0.5">
+            <!-- Signal Mode Toggle -->
+            <div class="control-group" style="margin-bottom: 16px;">
+                <div class="section-title">Signal Mode</div>
+                <div class="segmented-control">
+                    <div class="segmented-option active" id="mode-ideal" onclick="setSignalMode('ideal')">Ideal</div>
+                    <div class="segmented-option" id="mode-real" onclick="setSignalMode('real')">Real</div>
+                </div>
+            </div>
+
+            <!-- Filter Settings (Collapsible) -->
+            <div class="section-header-collapsible" data-target="filter-settings-wrapper">
+                <div class="section-title" style="border:none; margin:0; padding:0;">Filter Settings</div>
+                <span class="material-symbols-outlined dropdown-icon">expand_more</span>
             </div>
             
-            <div class="control-group">
-                <div class="control-label">Window Center (Hz)</div>
-                <input type="range" id="filter-center-slider" min="0" max="50" value="10" step="0.5">
-                <div class="value-display" id="filter-center-display">10 Hz</div>
+            <div id="filter-settings-wrapper" class="collapsible-content expanded">
+                <div class="collapsible-inner">
+                    <div class="segmented-control" style="margin-bottom: 12px;">
+                        <div class="segmented-option active" id="filter-square" onclick="setFilterType('square')">Square</div>
+                        <div class="segmented-option" id="filter-gaussian" onclick="setFilterType('gaussian')">Gaussian</div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-label">Window Width (Hz)</div>
+                        <input type="range" id="filter-width-slider" min="1" max="50" value="5" step="0.5">
+                    </div>
+                    
+                    <div class="control-group">
+                        <div class="control-label">Window Center (Hz)</div>
+                        <input type="range" id="filter-center-slider" min="0" max="50" value="10" step="0.5">
+                        <div class="value-display" id="filter-center-display">10 Hz</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Signal Components (Collapsible) -->
-            <div class="section-header-collapsible" id="components-toggle">
+            <div class="section-header-collapsible" data-target="components-wrapper">
                 <div class="section-title" style="border:none; margin:0; padding:0;">Signal Components</div>
                 <span class="material-symbols-outlined dropdown-icon">expand_more</span>
             </div>
@@ -50,26 +72,57 @@
                 </div>
             </div>
 
-            <!-- Visualization -->
-            <div class="section-title" style="margin-top: 24px;">Visualization</div>
-            
-            <!-- Axis Toggle -->
-             <div class="control-group" style="flex-direction: row; justify-content: space-between; align-items: center;">
-                <div class="control-label">Show Grid & Axis</div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="axis-toggle" checked>
-                    <span class="slider"></span>
-                </label>
+            <!-- Audio Settings (Collapsible) -->
+            <div class="section-header-collapsible" data-target="audio-wrapper">
+                <div class="section-title" style="border:none; margin:0; padding:0;">Audio Settings</div>
+                <span class="material-symbols-outlined dropdown-icon">expand_more</span>
             </div>
 
-            <div class="control-group">
-                <div class="control-label">Time Base (s)</div>
-                <input type="range" id="time-base-slider" min="1" max="10" value="2" step="0.1">
+            <div id="audio-wrapper" class="collapsible-content expanded">
+                <div class="collapsible-inner">
+                    <div class="control-group">
+                        <div class="control-label">Freq Multiplier (x<span id="audio-mult-display">50</span>)</div>
+                        <input type="range" id="audio-mult-slider" min="10" max="200" value="50" step="10">
+                        <div style="font-size: 0.65rem; color: #888; margin-top: 4px; line-height: 1.2;">
+                            Multiplies simulation frequency to make it audible.
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <div class="control-group">
-                <div class="control-label">Smoothing</div>
-                <input type="range" id="smoothing-slider" min="0" max="0.95" value="0" step="0.05">
+            <!-- Visualization (Collapsible) -->
+            <div class="section-header-collapsible" data-target="visualization-wrapper">
+                <div class="section-title" style="border:none; margin:0; padding:0;">Visualization</div>
+                <span class="material-symbols-outlined dropdown-icon">expand_more</span>
+            </div>
+
+            <div id="visualization-wrapper" class="collapsible-content expanded">
+                <div class="collapsible-inner">
+                    <div class="control-group" style="flex-direction: row; justify-content: space-between; align-items: center;">
+                        <div class="control-label">Show Grid & Axis</div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="axis-toggle" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+
+
+                    <div class="control-group" style="margin-top: 12px; margin-bottom: 12px;">
+                        <div class="control-label" id="display-segment-label">Display Segment (0.00s - 5.00s)</div>
+                        <div class="double-slider-wrapper" id="display-segment-slider">
+                            <div class="double-slider-track"></div>
+                            <div class="double-slider-fill" id="display-segment-fill" style="left: 0%; width: 100%;"></div>
+                            <input type="range" class="double-slider-input" id="display-start-input" min="0" max="5" step="0.01" value="0" oninput="updateDisplaySegment('start', this.value)">
+                            <input type="range" class="double-slider-input" id="display-end-input" min="0" max="5" step="0.01" value="5" oninput="updateDisplaySegment('end', this.value)">
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-label">Smoothing</div>
+                        <input type="range" id="smoothing-slider" min="0" max="0.95" value="0" step="0.05">
+                    </div>
+                </div>
             </div>
             
             <div style="flex: 1;"></div> <!-- Spacer to push Reset down -->
@@ -85,15 +138,25 @@
         <main class="plots-wrapper">
             <div class="plot-container">
                 <div class="plot-label">ORIGINAL SIGNAL (TIME DOMAIN) [s]</div>
+                <div class="plot-controls">
+                    <button class="icon-btn" onclick="toggleAudio('original')" id="btn-play-original" title="Play Original">
+                        <span class="material-symbols-outlined">play_arrow</span>
+                    </button>
+                </div>
                 <canvas id="signal-canvas"></canvas>
             </div>
             <div class="plot-container">
                 <div class="plot-label">FOURIER TRANSFORM (FREQUENCY DOMAIN) [Hz]</div>
                 <canvas id="frequency-canvas"></canvas>
-                <div id="filter-overlay"></div> <!-- For interaction if needed, or draw on canvas -->
+                <div id="filter-overlay"></div> 
             </div>
             <div class="plot-container">
                 <div class="plot-label">RECONSTRUCTED SIGNAL (FILTERED) [s]</div>
+                <div class="plot-controls">
+                    <button class="icon-btn" onclick="toggleAudio('reconstructed')" id="btn-play-recon" title="Play Reconstructed">
+                        <span class="material-symbols-outlined">play_arrow</span>
+                    </button>
+                </div>
                 <canvas id="reconstructed-canvas"></canvas>
             </div>
         </main>
