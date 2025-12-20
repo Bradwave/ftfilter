@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FT Filter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" type="image/svg+xml" href="imgs/favicon.svg">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Controls -->
+        <aside class="sidebar">
+            <header>
+                <h1>FT FILTER</h1>
+                <p>Signal analysis & filtering</p>
+            </header>
+
+            <!-- Filter Settings (Moved to Top) -->
+            <div class="section-title" style="margin-top: 12px;">Filter Settings</div>
+            <div class="control-group">
+                <div class="control-label">Window Width (Hz)</div>
+                <input type="range" id="filter-width-slider" min="1" max="50" value="5" step="0.5">
+            </div>
+            
+            <div class="control-group">
+                <div class="control-label">Window Center (Hz)</div>
+                <input type="range" id="filter-center-slider" min="0" max="50" value="10" step="0.5">
+                <div class="value-display" id="filter-center-display">10 Hz</div>
+            </div>
+
+            <!-- Signal Components (Collapsible) -->
+            <div class="section-header-collapsible" id="components-toggle">
+                <div class="section-title" style="border:none; margin:0; padding:0;">Signal Components</div>
+                <span class="material-symbols-outlined dropdown-icon">expand_more</span>
+            </div>
+            
+            <div id="components-wrapper" class="collapsible-content expanded">
+                <div class="collapsible-inner">
+                    <div id="components-container">
+                        <!-- Components injected here -->
+                    </div>
+                    <button id="add-component-btn" class="action-button">
+                        <span class="material-symbols-outlined">add</span> ADD SINE WAVE
+                    </button>
+                </div>
+            </div>
+
+            <!-- Visualization -->
+            <div class="section-title" style="margin-top: 24px;">Visualization</div>
+            
+            <!-- Axis Toggle -->
+             <div class="control-group" style="flex-direction: row; justify-content: space-between; align-items: center;">
+                <div class="control-label">Show Grid & Axis</div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="axis-toggle" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="control-group">
+                <div class="control-label">Time Base (s)</div>
+                <input type="range" id="time-base-slider" min="1" max="10" value="2" step="0.1">
+            </div>
+
+            <div class="control-group">
+                <div class="control-label">Smoothing</div>
+                <input type="range" id="smoothing-slider" min="0" max="0.95" value="0" step="0.05">
+            </div>
+            
+            <div style="flex: 1;"></div> <!-- Spacer to push Reset down -->
+            
+            <div style="margin-top: 40px; border-top: 1px solid var(--color-border); padding-top: 20px;">
+                 <button id="reset-btn" class="secondary" style="width: 100%;">
+                    <span class="material-symbols-outlined">restart_alt</span> RESET
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Plot Area -->
+        <main class="plots-wrapper">
+            <div class="plot-container">
+                <div class="plot-label">ORIGINAL SIGNAL (TIME DOMAIN) [s]</div>
+                <canvas id="signal-canvas"></canvas>
+            </div>
+            <div class="plot-container">
+                <div class="plot-label">FOURIER TRANSFORM (FREQUENCY DOMAIN) [Hz]</div>
+                <canvas id="frequency-canvas"></canvas>
+                <div id="filter-overlay"></div> <!-- For interaction if needed, or draw on canvas -->
+            </div>
+            <div class="plot-container">
+                <div class="plot-label">RECONSTRUCTED SIGNAL (FILTERED) [s]</div>
+                <canvas id="reconstructed-canvas"></canvas>
+            </div>
+        </main>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
