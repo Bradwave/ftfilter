@@ -242,7 +242,8 @@ function setupListeners() {
     // Interaction on frequency canvas (freqCanvas logic remains the same)
     const freqCanvas = elements.canvases.freq; 
     
-    freqCanvas.addEventListener('mousedown', (e) => {
+    freqCanvas.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
         const rect = freqCanvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const width = rect.width; 
@@ -261,8 +262,9 @@ function setupListeners() {
         }
     });
 
-    window.addEventListener('mousemove', (e) => {
+    window.addEventListener('pointermove', (e) => {
         if (!state.isDraggingFilter) return;
+        e.preventDefault(); 
         const rect = freqCanvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const width = rect.width;
@@ -276,7 +278,7 @@ function setupListeners() {
         updateFilterUI();
     });
 
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('pointerup', () => {
         if (state.isDraggingFilter) {
             saveState();
         }
@@ -744,7 +746,8 @@ function animate() {
         const mag = Math.sqrt(fftData[k].re**2 + fftData[k].im**2);
         const absF = Math.abs(f);
         
-        freqs.push({ f: absF, mag }); 
+        const displayMag = state.signalMode === 'real' ? mag * 2.5 : mag;
+        freqs.push({ f: absF, mag: displayMag }); 
 
         let response = 0;
         
