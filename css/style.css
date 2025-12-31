@@ -75,7 +75,7 @@ body.loaded {
 @media (max-width: 768px) {
     .app-container {
         grid-template-columns: 1fr;
-        grid-template-rows: 1fr 340px;
+        grid-template-rows: 1fr 28dvh;
         /* Plots top, Sidebar bottom */
         height: 100dvh;
         overflow: hidden;
@@ -85,6 +85,7 @@ body.loaded {
         order: 1;
         /* Top */
         padding: 12px;
+        padding-bottom: 30px;
         gap: 8px;
         overflow-y: auto;
         /* Allow plots to scroll if condensed */
@@ -283,6 +284,13 @@ input[type="range"]::-webkit-slider-thumb {
 
 input[type="range"]::-webkit-slider-thumb:hover {
     transform: scale(1.2);
+}
+
+.plot-container canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
 }
 
 /* Toggle Switch (Motus Style) */
