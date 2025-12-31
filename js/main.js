@@ -125,11 +125,14 @@ function saveState() {
         filterWidth: state.filterWidth,
         timeBase: state.timeBase,
         showAxis: state.showAxis,
+        zoomStart: state.zoomStart,
+        zoomEnd: state.zoomEnd,
         smoothing: state.smoothing,
         signalMode: state.signalMode,
         filterType: state.filterType,
         audioMultiplier: state.audioMultiplier,
-        masterVolume: state.masterVolume
+        masterVolume: state.masterVolume,
+        collapsedSections: Array.from(document.querySelectorAll('.collapsible-content')).filter(el => !el.classList.contains('expanded')).map(el => el.id)
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 }
@@ -193,6 +196,30 @@ function loadState() {
                     document.getElementById('master-vol-display').innerText = state.masterVolume;
                 }
             }
+            if (parsed.masterVolume !== undefined) {
+                state.masterVolume = parsed.masterVolume;
+                const mv = document.getElementById('master-vol-slider');
+                if (mv) {
+                    mv.value = state.masterVolume;
+                    document.getElementById('master-vol-display').innerText = state.masterVolume;
+                }
+            }
+            
+            // Restore Collapsed Sections
+            if (parsed.collapsedSections && Array.isArray(parsed.collapsedSections)) {
+                parsed.collapsedSections.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.classList.remove('expanded');
+                        const header = document.querySelector(`.section-header-collapsible[data-target="${id}"]`);
+                        if(header) {
+                            const icon = header.querySelector('.dropdown-icon');
+                            if(icon) icon.classList.add('collapsed');
+                            if(icon) icon.style.transform = "rotate(-90deg)"; // Manual sync for ftfilter logic
+                        }
+                    }
+                });
+            }
         } catch (e) { console.error("Failed to load state", e); }
     }
 }
@@ -213,6 +240,7 @@ function setupListeners() {
             } else {
                 icon.style.transform = "rotate(-90deg)";
             }
+            saveState();
         });
     });
 
@@ -2027,5 +2055,10 @@ function init() {
 
     animate();
 }
+
+// Fade In
+window.addEventListener('load', () => {
+    setTimeout(() => { document.body.classList.add('loaded'); }, 50);
+});
 
 init();

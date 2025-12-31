@@ -31,11 +31,17 @@ body {
     margin: 0;
     padding: 0;
     width: 100vw;
-    height: 100vh;
+    height: 100dvh;
     font-family: var(--font-mono);
     background-color: var(--color-bg);
     color: var(--color-text-main);
     overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+body.loaded {
+    opacity: 1;
 }
 
 /* Scrollbar */
@@ -71,7 +77,7 @@ body {
         grid-template-columns: 1fr;
         grid-template-rows: 1fr 340px;
         /* Plots top, Sidebar bottom */
-        height: 100vh;
+        height: 100dvh;
         overflow: hidden;
     }
 
@@ -180,6 +186,10 @@ header p {
 }
 
 .section-header-collapsible:hover .section-title {
+    color: var(--color-accent);
+}
+
+.section-header-collapsible:hover .dropdown-icon {
     color: var(--color-accent);
 }
 
