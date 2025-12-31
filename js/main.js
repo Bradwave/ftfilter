@@ -365,6 +365,9 @@ function renderComponentsUI() {
             </div>
             
             <div class="component-body">
+                <div class="component-collapsed-preview" style="margin-bottom: 2px;">
+                    <canvas id="exp-col-prev-${comp.id}" width="300" height="40" style="width:100%; height:40px; display:block;"></canvas>
+                </div>
                 <div class="component-controls">
                     <!-- Wave Type Selector -->
                     <div class="component-control-item" style="grid-column: span 2;">
@@ -433,7 +436,7 @@ function renderComponentsUI() {
                 <div class="envelope-section">
                     <div class="envelope-header">
                          <span class="component-label">ENVELOPE</span>
-                         <div class="segmented-control" style="margin: 0; width: 120px; transform: scale(0.9);">
+                         <div class="segmented-control envelope-type-control">
                             <div class="segmented-option ${comp.envelopeType==='gaussian'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
                             <div class="segmented-option ${comp.envelopeType==='adsr'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
                             <div class="segmented-option ${comp.envelopeType==='square'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'square')">SQR</div>
@@ -463,6 +466,7 @@ function renderComponentsUI() {
             if (state.signalMode === 'real') {
                 drawEnvelopePreview(document.getElementById(`env-prev-${comp.id}`), comp);
             }
+            drawCollapsedPreview(document.getElementById(`exp-col-prev-${comp.id}`), comp);
         }
     });
 }
