@@ -480,6 +480,7 @@ function renderComponentsUI() {
                          <div class="segmented-control envelope-type-control">
                             <div class="segmented-option ${comp.envelopeType === 'gaussian' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
                             <div class="segmented-option ${comp.envelopeType === 'adsr' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
+                            <div class="segmented-option ${comp.envelopeType === 'hann' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'hann')">HANN</div>
                             <div class="segmented-option ${comp.envelopeType === 'square' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'square')">SQR</div>
                         </div>
                     </div>
@@ -546,6 +547,8 @@ function getEnvelopeControls(comp) {
                 <span class="param-label">R</span>
             </div>
         `;
+    } else if (comp.envelopeType === 'hann') {
+        return `<div class="param-col" style="grid-column: span 4; text-align: center;"><span class="param-label">HANN WINDOW (FULL DURATION)</span></div>`;
     } else {
         return `<div class="param-col" style="grid-column: span 4; text-align: center;"><span class="param-label">SQUARE ENVELOPE (FULL AMPLITUDE)</span></div>`;
     }
@@ -862,6 +865,8 @@ function getEnvelopeValue(tNorm, type, params) {
         const num = Math.pow(tNorm - p.center, 2);
         const den = 2 * Math.pow(p.width, 2);
         return Math.exp(-num / den);
+    } else if (type === 'hann') {
+        return 0.5 * (1 - Math.cos(2 * Math.PI * tNorm));
     } else if (type === 'square') {
         return 1.0;
     } else {

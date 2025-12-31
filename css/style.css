@@ -490,7 +490,7 @@ canvas {
 }
 
 .segmented-control.envelope-type-control {
-    width: 140px;
+    width: auto;
     margin: 0;
 }
 
