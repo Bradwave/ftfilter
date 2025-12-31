@@ -1,7 +1,9 @@
 class SignalComponent {
-    constructor(freq, amp) {
+    constructor(freq, amp, phase = 0, waveType = 'sine') {
         this.freq = freq;
         this.amp = amp;
+        this.phase = phase;
+        this.waveType = waveType;
         this.id = Math.random().toString(36).substr(2, 9);
         // Real Mode Params
         this.startTime = 0;   // In seconds
@@ -9,8 +11,10 @@ class SignalComponent {
         this.envelopeType = 'gaussian'; // 'gaussian' or 'adsr'
         this.envelopeParams = {
             gaussian: { center: 0.5, width: 0.2 }, 
-            adsr: { a: 0.1, d: 0.1, s: 0.5, r: 0.2 } 
+            adsr: { a: 0.1, d: 0.1, s: 0.5, r: 0.2 },
+            square: {}
         };
+        this.collapsed = false;
     }
 }
 
@@ -30,6 +34,7 @@ const state = {
     signalMode: 'ideal', // 'ideal' or 'real'
     filterType: 'square', // 'square' or 'gaussian'
     audioMultiplier: 50, // Scaling factor
+    masterVolume: 0.5,
     // New zoom/pan state
     zoomStart: 0, // Start time of the visible window in seconds
     zoomEnd: 5,   // End time of the visible window in seconds
@@ -119,7 +124,8 @@ function saveState() {
         smoothing: state.smoothing,
         signalMode: state.signalMode,
         filterType: state.filterType,
-        audioMultiplier: state.audioMultiplier
+        audioMultiplier: state.audioMultiplier,
+        masterVolume: state.masterVolume
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 }
@@ -132,21 +138,34 @@ function loadState() {
             state.components = parsed.components.map(c => {
                 const n = new SignalComponent(c.freq, c.amp);
                 n.id = c.id; 
+                if (c.phase !== undefined) n.phase = c.phase;
+                if (c.waveType !== undefined) n.waveType = c.waveType;
                 // Restore new params
                 if(c.startTime !== undefined) n.startTime = c.startTime;
                 if(c.endTime !== undefined) n.endTime = c.endTime;
                 if(c.envelopeType) n.envelopeType = c.envelopeType;
-                if(c.envelopeParams) n.envelopeParams = c.envelopeParams;
+                if(c.envelopeParams) {
+                    // Merge params to ensure new defaults (like square) are present
+                    n.envelopeParams = {
+                        ...n.envelopeParams,
+                        ...c.envelopeParams
+                    };
+                }
                 return n;
             });
-            state.filterCenter = parsed.filterCenter;
-            state.filterWidth = parsed.filterWidth;
-            state.timeBase = parsed.timeBase;
-            state.showAxis = parsed.showAxis;
-            state.smoothing = parsed.smoothing || 0;
-            state.signalMode = parsed.signalMode || 'ideal';
-            state.filterType = parsed.filterType || 'square';
-            state.audioMultiplier = parsed.audioMultiplier || 50;
+            if(parsed.filterCenter !== undefined) state.filterCenter = parsed.filterCenter;
+            if(parsed.filterWidth !== undefined) state.filterWidth = parsed.filterWidth;
+            if(parsed.timeBase !== undefined) state.timeBase = parsed.timeBase;
+            if(parsed.showAxis !== undefined) state.showAxis = parsed.showAxis;
+            
+            // New State
+            if(parsed.zoomStart !== undefined) state.zoomStart = parsed.zoomStart;
+            if(parsed.zoomEnd !== undefined) state.zoomEnd = parsed.zoomEnd;
+
+            if(parsed.smoothing !== undefined) state.smoothing = parsed.smoothing;
+            if(parsed.signalMode !== undefined) state.signalMode = parsed.signalMode;
+            if(parsed.filterType !== undefined) state.filterType = parsed.filterType;
+            if(parsed.audioMultiplier !== undefined) state.audioMultiplier = parsed.audioMultiplier;
             
             // Sync UI inputs
             elements.filterCenterSlider.value = state.filterCenter;
@@ -158,6 +177,14 @@ function loadState() {
             if(elements.audioMultSlider) {
                 elements.audioMultSlider.value = state.audioMultiplier;
                 elements.audioMultDisplay.innerText = state.audioMultiplier;
+            }
+            if(parsed.masterVolume !== undefined) {
+                 state.masterVolume = parsed.masterVolume;
+                 const mv = document.getElementById('master-vol-slider');
+                 if(mv) {
+                     mv.value = state.masterVolume;
+                     document.getElementById('master-vol-display').innerText = state.masterVolume;
+                 }
             }
         } catch(e) { console.error("Failed to load state", e); }
     }
@@ -182,8 +209,21 @@ function setupListeners() {
         });
     });
 
+    // Master Volume
+    const volSlider = document.getElementById('master-vol-slider');
+    const volDisplay = document.getElementById('master-vol-display');
+    if (volSlider && volDisplay) {
+        volSlider.value = state.masterVolume;
+        volDisplay.textContent = state.masterVolume;
+        volSlider.addEventListener('input', (e) => {
+             state.masterVolume = parseFloat(e.target.value);
+             volDisplay.textContent = state.masterVolume;
+             saveState();
+        });
+    }
+
     elements.addComponentBtn.addEventListener('click', () => {
-        state.components.push(new SignalComponent(1, 1.0, 0.0, 'sine', true));
+        state.components.push(new SignalComponent(1, 1.0));
         renderComponentsUI();
         saveState();
     });
@@ -221,7 +261,7 @@ function setupListeners() {
         localStorage.removeItem(STORAGE_KEY);
         // Reset Logic
         state.components = [
-            new SignalComponent(1, 1.0, 0.0, 'sine', true)
+            new SignalComponent(1, 1.0)
         ];
         state.filterCenter = 5;
         state.filterWidth = 2;
@@ -301,16 +341,43 @@ function renderComponentsUI() {
         const el = document.createElement('div');
         el.className = 'component-row';
         
-        // Base Controls
-        let html = `
+        if (comp.collapsed) {
+             html = `
             <div class="component-header">
                 <span>WAVE ${index + 1}</span>
-                <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span class="material-symbols-outlined remove-btn" style="font-size: 18px;" onclick="window.toggleCollapse('${comp.id}')">expand_more</span>
+                    <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
+                </div>
+            </div>
+            <div class="component-collapsed-preview">
+                <canvas id="col-prev-${comp.id}" width="300" height="40" style="width:100%; height:40px; display:block;"></canvas>
+            </div>
+            `;
+        } else {
+             html = `
+            <div class="component-header">
+                <span>WAVE ${index + 1}</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span class="material-symbols-outlined remove-btn" style="font-size: 18px;" onclick="window.toggleCollapse('${comp.id}')">expand_less</span>
+                    <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
+                </div>
             </div>
             
             <div class="component-body">
                 <div class="component-controls">
-                    <div class="component-control-item">
+                    <!-- Wave Type Selector -->
+                    <div class="component-control-item" style="grid-column: span 2;">
+                        <div class="segmented-control" style="margin-bottom: 0;">
+                            <div class="segmented-option ${comp.waveType === 'sine' || !comp.waveType ? 'active' : ''}" onclick="setWaveType('${comp.id}', 'sine')">SINE</div>
+                            <div class="segmented-option ${comp.waveType === 'square' ? 'active' : ''}" onclick="setWaveType('${comp.id}', 'square')">SQR</div>
+                            <div class="segmented-option ${comp.waveType === 'triangle' ? 'active' : ''}" onclick="setWaveType('${comp.id}', 'triangle')">TRI</div>
+                            <div class="segmented-option ${comp.waveType === 'sawtooth' ? 'active' : ''}" onclick="setWaveType('${comp.id}', 'sawtooth')">SAW</div>
+                        </div>
+                    </div>
+
+                    <!-- Freq -->
+                    <div class="component-control-item" style="grid-column: span 2;">
                         <div class="component-slider-wrapper">
                             <span class="component-label">FREQ</span>
                             <input type="range" class="compact-range" value="${comp.freq}" min="0.5" max="50" step="0.5" 
@@ -319,6 +386,7 @@ function renderComponentsUI() {
                         <div id="f-val-${comp.id}" class="component-value">${comp.freq} Hz</div>
                     </div>
 
+                    <!-- Amp & Phase -->
                     <div class="component-control-item">
                         <div class="component-slider-wrapper">
                             <span class="component-label">AMP</span>
@@ -327,6 +395,15 @@ function renderComponentsUI() {
                         </div>
                         <div id="a-val-${comp.id}" class="component-value">${comp.amp}</div>
                     </div>
+
+                    <div class="component-control-item">
+                        <div class="component-slider-wrapper">
+                            <span class="component-label">PHASE</span>
+                            <input type="range" class="compact-range" value="${comp.phase || 0}" min="0" max="${(2 * Math.PI).toFixed(4)}" step="0.1" 
+                                oninput="updateComponent('${comp.id}', 'phase', this.value)">
+                        </div>
+                        <div id="p-val-${comp.id}" class="component-value">${(comp.phase || 0).toFixed(2)} rad</div>
+                    </div>
                 </div>
                 
                 <div class="component-preview-wrapper">
@@ -334,7 +411,7 @@ function renderComponentsUI() {
                 </div>
         `;
 
-        // Real Mode Extensions
+        // Real Mode Extensions for Expanded View
         if (state.signalMode === 'real') {
              html += `
                 <!-- Time Constraints -->
@@ -359,6 +436,7 @@ function renderComponentsUI() {
                          <div class="segmented-control" style="margin: 0; width: 120px; transform: scale(0.9);">
                             <div class="segmented-option ${comp.envelopeType==='gaussian'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
                             <div class="segmented-option ${comp.envelopeType==='adsr'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
+                            <div class="segmented-option ${comp.envelopeType==='square'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'square')">SQR</div>
                         </div>
                     </div>
                     
@@ -372,13 +450,19 @@ function renderComponentsUI() {
         }
 
         html += `</div>`; // Close component-body
+        } // End else/expanded
+        
         el.innerHTML = html;
         elements.componentsContainer.appendChild(el);
         
-        // Draw Previews
-        drawComponentPreview(document.getElementById(`preview-${comp.id}`), comp);
-        if (state.signalMode === 'real') {
-            drawEnvelopePreview(document.getElementById(`env-prev-${comp.id}`), comp);
+        if (comp.collapsed) {
+             drawCollapsedPreview(document.getElementById(`col-prev-${comp.id}`), comp);
+        } else {
+            // Draw Previews
+            drawComponentPreview(document.getElementById(`preview-${comp.id}`), comp);
+            if (state.signalMode === 'real') {
+                drawEnvelopePreview(document.getElementById(`env-prev-${comp.id}`), comp);
+            }
         }
     });
 }
@@ -396,7 +480,7 @@ function getEnvelopeControls(comp) {
                 <span class="param-label">WIDTH</span>
             </div>
         `;
-    } else {
+    } else if (comp.envelopeType === 'adsr') {
         // ADSR
         const p = comp.envelopeParams.adsr;
         return `
@@ -417,6 +501,8 @@ function getEnvelopeControls(comp) {
                 <span class="param-label">R</span>
             </div>
         `;
+    } else {
+        return `<div class="param-col" style="grid-column: span 4; text-align: center;"><span class="param-label">SQUARE ENVELOPE (FULL AMPLITUDE)</span></div>`;
     }
 }
 
@@ -482,7 +568,77 @@ window.updateTimeConstraint = (id, type, value) => {
          }
     }
     saveState();
+    saveState();
 };
+
+window.toggleCollapse = (id) => {
+    const c = state.components.find(x => x.id === id);
+    if (c) {
+        c.collapsed = !c.collapsed;
+        renderComponentsUI();
+        saveState();
+    }
+};
+
+function drawCollapsedPreview(canvas, comp) {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    if(canvas.width !== Math.round(r.width * dpr)) {
+        canvas.width = r.width * dpr;
+        canvas.height = r.height * dpr;
+    }
+    ctx.scale(dpr, dpr);
+    const w = r.width;
+    const h = r.height;
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.beginPath();
+    ctx.strokeStyle = '#1484e6';
+    ctx.lineWidth = 1.5;
+    
+    // Draw 0 to 5s timeline
+    const MAX = 5.0;
+    const yBase = h / 2;
+    const yScale = h / 2.5; 
+    
+    for (let i = 0; i <= w; i++) {
+        const t = (i / w) * MAX;
+        let val = 0;
+        
+        // Time Constraint & Envelope Logic similar to signal gen
+        // FTFilter has signalMode. If complex, envelopes might not apply? 
+        // User said "taking into account the time constrait" which usually implies Real mode in FTFilter.
+        // But let's assume if signalMode is 'real' we apply constraints. If 'complex', we might just show raw wave?
+        // FTFilter usually forces meaningful envelopes only in Real mode.
+        // However, the collapsed state might exist in both modes.
+        // Let's stick to the logic: if Real mode, apply constraints.
+        
+        if (state.signalMode === 'real') {
+            if (t >= comp.startTime && t <= comp.endTime) {
+                const duration = comp.endTime - comp.startTime;
+                let env = 1;
+                if (duration > 0.01) {
+                    const tNorm = (t - comp.startTime) / duration;
+                    env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                }
+                const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+                val = carrier * env * comp.amp;
+            }
+        } else {
+             // Complex mode (no time constraints visually usually, or full duration)
+             const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+             val = carrier * comp.amp;
+        }
+        
+        const y = yBase - val * yScale;
+        
+        if (i === 0) ctx.moveTo(i, y);
+        else ctx.lineTo(i, y);
+    }
+    ctx.stroke();
+}
 
 window.setEnvelopeType = (id, type) => {
     const comp = state.components.find(c => c.id === id);
@@ -519,22 +675,43 @@ function drawEnvelopePreview(canvas, comp) {
     const h = rect.height;
     ctx.clearRect(0, 0, w, h);
     
-    // Grid/Guide
+    // Background Line
     ctx.beginPath();
     ctx.strokeStyle = '#eee';
-    // ctx.setLineDash([4, 4]); // Removed dashes
     ctx.moveTo(0, h); ctx.lineTo(w, h); 
     ctx.moveTo(0, 0); ctx.lineTo(w, 0); 
     ctx.stroke();
-    // ctx.setLineDash([]);
-    
+
+    // Enveloped Wave Preview (Transparent Light Blue)
+    // Matches fourier3d style
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(135, 206, 250, 0.4)';
+    ctx.lineWidth = 1;
+    for(let i=0; i<=w; i++) {
+        const tNorm = i / w; // 0 to 1
+        const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+        // Note: tNorm is 0..1 (envelope space). Carrier depends on Time.
+        // Assuming Preview covers 0..1s or full duration?
+        // In fourier3d preview, t goes 0..1 (previewTime).
+        // Let's use standard preview time logic:
+        // Actually fourier3d drawEnvelopePreview loops x=0..w, t=x/w.
+        const t = tNorm; // 1s preview
+        const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+        const val = Math.abs(carrier) * env;
+        
+        const y = h - (val * h * 0.9) - 2; 
+        if (i===0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
+    }
+    ctx.stroke();
+
+    // Envelope Curve
     ctx.beginPath();
     ctx.strokeStyle = '#1484e6';
     ctx.lineWidth = 2;
     
     const samples = 100;
     for(let i=0; i<=samples; i++) {
-        const tNorm = i / samples; // 0 to 1 across the active duration
+        const tNorm = i / samples; 
         const val = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
         
         const x = tNorm * w;
@@ -551,6 +728,8 @@ function getEnvelopeValue(tNorm, type, params) {
         const num = Math.pow(tNorm - p.center, 2);
         const den = 2 * Math.pow(p.width, 2);
         return Math.exp(-num / den);
+    } else if (type === 'square') {
+        return 1.0;
     } else {
         const p = params.adsr;
         const t = tNorm; // alias
@@ -600,7 +779,7 @@ function drawComponentPreview(canvas, comp) {
     ctx.moveTo(0, h/2); // Start middle
     for (let x = 0; x <= w; x++) {
         const t = (x / w) * previewTime;
-        const val = comp.amp * Math.sin(2 * Math.PI * comp.freq * t);
+        const val = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
         // Scale: Max amp 2.0 covers most of height
         // height is 28. amp=2 -> range -2..2 is 4. scale factor?
         // Let's just scale such that amp=2.5 fills height.
@@ -620,8 +799,13 @@ window.updateComponent = (id, prop, value) => {
     const comp = state.components.find(c => c.id === id);
     if (comp) {
         comp[prop] = parseFloat(value);
-        document.getElementById((prop === 'freq' ? 'f-val-' : 'a-val-') + id).innerText = 
-            value + (prop === 'freq' ? ' Hz' : '');
+        const valEl = document.getElementById((prop === 'freq' ? 'f-val-' : (prop === 'amp' ? 'a-val-' : 'p-val-')) + id);
+        if (valEl) {
+            let label = value;
+            if (prop === 'freq') label += ' Hz';
+            else if (prop === 'phase') label = parseFloat(value).toFixed(2) + ' rad';
+            valEl.innerText = label;
+        }
             
         // Redraw preview
         const previewCanvas = document.getElementById(`preview-${comp.id}`);
@@ -630,6 +814,40 @@ window.updateComponent = (id, prop, value) => {
         saveState();
     }
 };
+
+window.setWaveType = (id, type) => {
+    const comp = state.components.find(c => c.id === id);
+    if(comp) {
+        comp.waveType = type;
+        renderComponentsUI();
+        saveState();
+    }
+};
+
+function getWaveValue(t, freq, phase, type) {
+    const angle = 2 * Math.PI * freq * t + phase;
+    switch (type) {
+        case 'square':
+            return Math.sign(Math.cos(angle));
+        case 'triangle':
+            // Triangle wave from -1 to 1
+            // 2/PI * asin(sin(angle)) gives triangle phase shifted.
+            // Let's usestandard: 4 * abs(t * f + phase/(2PI) - floor(... + 0.75) ) ...
+            // Easier: 2/PI * asin(sin(angle)) is valid but is just one phase.
+            // Let's use:
+            // 2 * Math.abs(2 * ((freq * t + phase / (2 * Math.PI)) % 1 + 1) % 1 - 0.5) - 1 ?? No to complicated.
+            // Using asin(cos(x)) is standard triangle.
+            return (2 / Math.PI) * Math.asin(Math.cos(angle));
+        case 'sawtooth':
+            // 2 * ( (angle / 2PI) - floor(angle/2PI + 0.5) )
+            // Note: angle = 2*PI*f*t + phase
+            const normAngle = (freq * t + phase / (2 * Math.PI));
+            return 2 * (normAngle - Math.floor(normAngle + 0.5));
+        case 'sine':
+        default:
+            return Math.cos(angle);
+    }
+}
 
 // FFT Implementation (Simple Radix-2 DIT)
 function fft(data) {
@@ -712,7 +930,7 @@ function animate() {
         let val = 0;
         
         state.components.forEach(comp => {
-            let compVal = comp.amp * Math.cos(2 * Math.PI * comp.freq * t);
+            let compVal = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
             
             if (state.signalMode === 'real') {
                 if (t < comp.startTime || t > comp.endTime) {
@@ -1098,7 +1316,8 @@ function generateAudioBuffer(type) {
             const t = i / sr; // Audio Time
             let val = 0;
             state.components.forEach(comp => {
-                let compVal = comp.amp * Math.cos(2 * Math.PI * (comp.freq * K) * t);
+                // Use getWaveValue with Audio Frequency (freq * K) and original phase
+                let compVal = comp.amp * getWaveValue(t, comp.freq * K, comp.phase || 0, comp.waveType || 'sine');
                 
                 if (state.signalMode === 'real') {
                    if (t < comp.startTime || t > comp.endTime) {
@@ -1116,31 +1335,230 @@ function generateAudioBuffer(type) {
             data[i] = Math.tanh(val * 0.5); 
         }
     } else {
-        if (!lastFilteredFFT) return buffer;
-        const N = lastFilteredFFT.length;
-        const significantBins = [];
-        for(let k=0; k<N; k++) {
-             const mag = Math.sqrt(lastFilteredFFT[k].re**2 + lastFilteredFFT[k].im**2);
-             if (mag > 0.01) {
-                 let f = k * state.sampleRate / N;
-                 if (k > N/2) f = (k - N) * state.sampleRate / N;
-                 f = Math.abs(f);
-                 significantBins.push({ f: f * K, re: lastFilteredFFT[k].re / (N/2), im: lastFilteredFFT[k].im / (N/2) }); 
-             }
-        }
+        // Reconstructed Audio: Additive Synthesis Strategy
+        // This avoids FFT bin artifacts ("pulsating") and accurately reflects the filter's effect on harmonic series.
         
+        // 1. Pre-calculate active harmonics for each component
+        const activeHarmonics = [];
+        state.components.forEach(comp => {
+            // Get harmonic series (up to Nyquist of Audio Rate)
+            const nyquist = sr / 2;
+            const harmonics = getHarmonics(comp.freq * K, comp.waveType || 'sine', nyquist);
+            
+            harmonics.forEach(h => {
+                // Calculate Filter Response for this harmonic
+                // Note: Filter operates in Visual Frequency domain.
+                // We know AudioFreq = VisualFreq * K
+                // So VisualFreq = AudioFreq / K = h.freq / K = (comp.freq * K * n) / K = comp.freq * n
+                // Wait, h.freq is already scaled by K? Yes, getHarmonics takes baseFreq.
+                // So we need to reverse scale to check filter response.
+                const visualFreq = h.freq / K;
+                
+                let response = 0;
+                if (state.filterType === 'square') {
+                     if (visualFreq >= (state.filterCenter - state.filterWidth/2) && 
+                         visualFreq <= (state.filterCenter + state.filterWidth/2)) {
+                         response = 1;
+                     }
+                } else {
+                    // Gaussian
+                    const sigma = Math.max(0.1, state.filterWidth / 4); 
+                    const num = Math.pow(visualFreq - state.filterCenter, 2);
+                    const den = 2 * Math.pow(sigma, 2);
+                    response = Math.exp(-num / den);
+                }
+                
+                // If response is significant, add to list
+                if (response > 0.001) {
+                    activeHarmonics.push({
+                        freq: h.freq, // Audio Freq
+                        amp: comp.amp * h.amp * response,
+                        phase: comp.phase || 0, // Fundamental phase shifts harmonics? 
+                                                // Yes, harmonic N has phase N*phi? 
+                                                // Actually for simple waves: sin(w*t + phi).
+                                                // Square = sin(x) + 1/3 sin(3x) + ...
+                                                // If x -> x+phi => sin(x+phi) + 1/3 sin(3(x+phi)) = sin(x+phi) + 1/3 sin(3x + 3phi)
+                                                // So harmonic N gets N*phi phase shift.
+                        n: h.n,
+                        // Component Reference for Envelope Logic
+                        startTime: comp.startTime,
+                        endTime: comp.endTime,
+                        envelopeType: comp.envelopeType,
+                        envelopeParams: comp.envelopeParams
+                    });
+                }
+            });
+        });
+
+        // 2. Synthesize
         for (let i = 0; i < totalSamples; i++) {
             const t = i / sr;
             let val = 0;
-            for (let b = 0; b < significantBins.length; b++) {
-                 const bin = significantBins[b];
-                 const angle = 2 * Math.PI * bin.f * t;
-                 val += bin.re * Math.cos(angle) - bin.im * Math.sin(angle); 
+            
+            for (let h of activeHarmonics) {
+                // Basic Osc
+                // Phase: The getHarmonics usually assumes sin(n*w*t).
+                // Phase shift: we must apply n * phase.
+                const angle = 2 * Math.PI * h.freq * t + (h.phase * h.n);
+                let oscVal = h.amp * Math.cos(angle); // Cosine base for consistency with getWaveValue default
+                
+                // Note: getHarmonics usually returns relative amps assuming Sine base?
+                // Let's ensure getHarmonics returns math consistent with 'cosine' or 'sine' base.
+                // Standard getWaveValue uses Math.cos(angle).
+                // Square: sign(cos(x)). Expansion of sign(cos(x)) is 4/pi * (cos(x) - 1/3 cos(3x) + 1/5 cos(5x)...)
+                // So alternating signs for cosine series of square wave.
+                
+                // Let's trust getHarmonics to handle sign/phase offsets if possible, 
+                // OR we just sum them. 
+                // If getHarmonics returns signed amplitude, we just use cos.
+                
+                // Real Mode Envelope
+                if (state.signalMode === 'real') {
+                   if (t < h.startTime || t > h.endTime) {
+                       oscVal = 0;
+                   } else {
+                       const dur = h.endTime - h.startTime;
+                       if (dur > 0.01) {
+                            const tNorm = (t - h.startTime) / dur;
+                            oscVal *= getEnvelopeValue(tNorm, h.envelopeType, h.envelopeParams);
+                       }
+                   }
+                }
+                val += oscVal;
             }
-             data[i] = Math.tanh(val * 0.5);
+            data[i] = Math.tanh(val * 0.5) * state.masterVolume;
         }
     }
     return buffer;
+}
+
+// IO Logic
+window.exportComponents = () => {
+    const data = JSON.stringify(state.components, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ftfilter_components.json';
+    a.click();
+    URL.revokeObjectURL(url);
+};
+
+window.triggerImport = () => {
+    const inp = document.getElementById('import-file');
+    if(inp) inp.click();
+};
+
+window.importComponents = (input) => {
+    const file = input.files[0];
+    if (!file) return;
+    
+    if (state.components.length > 0) {
+        if (!confirm("This will replace all current signal components. Are you sure?")) {
+            input.value = ''; 
+            return;
+        }
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (Array.isArray(data)) {
+                // Compatible import logic
+                state.components = data.map(c => {
+                    const n = new SignalComponent(c.freq || 1, c.amp || 1, c.phase || 0, c.waveType || 'sine');
+                    n.id = c.id || Math.random().toString(36).substr(2, 9);
+                    // Real mode params restoration
+                    if(c.startTime !== undefined) n.startTime = c.startTime;
+                    if(c.endTime !== undefined) n.endTime = c.endTime;
+                    if(c.envelopeType) n.envelopeType = c.envelopeType;
+                    if(c.envelopeParams) n.envelopeParams = c.envelopeParams;
+                    return n;
+                });
+                renderComponentsUI();
+                saveState();
+            } else {
+                alert("Invalid file format: format needs to be an array of component objects.");
+            }
+        } catch (err) {
+            alert("Error parsing JSON: " + err.message);
+        }
+    };
+    reader.readAsText(file);
+    input.value = ''; 
+};
+
+function getHarmonics(freq, type, nyquist) {
+    const harmonics = [];
+    let n = 1;
+    
+    // Safety
+    if (freq <= 0) return [];
+
+    while (freq * n < nyquist) {
+        let amp = 0;
+        
+        switch (type) {
+            case 'sine':
+                if (n === 1) amp = 1; 
+                break;
+            case 'square':
+                // Square (odd harmonics only): 4/pi * 1/n 
+                // However, our getWaveValue 'square' returns +/- 1 amplitude.
+                // The fundamental of a +/-1 square wave has amplitude 4/pi approx 1.27.
+                // We should normalize so the peak matches or the energy matches?
+                // Visual graph Square amplitude (controlled by slider) is peak-to-peak/2.
+                // getWaveValue returns +/- 1.
+                // So we use standard expansion: 1/n for odd n.
+                // Signs: cos(x) - 1/3 cos(3x) + 1/5 cos(5x) ...
+                if (n % 2 !== 0) {
+                     // Alternating signs: 1, -1, 1, -1 for n=1, 3, 5, 7
+                     // n=1 (idx0) -> +, n=3 (idx1) -> -, n=5 (idx2) -> +
+                     // ((n-1)/2) % 2 === 0 ? 1 : -1
+                     const sign = (((n - 1) / 2) % 2 === 0) ? 1 : -1;
+                     amp = (4 / Math.PI) * (1 / n) * sign;
+                }
+                break;
+            case 'triangle':
+                // Triangle (odd harmonics): 8/pi^2 * (-1)^k * 1/n^2
+                // series: cos(x) + 1/9 cos(3x) + ... ?? 
+                // Standard Triangle (0 start, peak at pi/2): 8/pi^2 * (sin(x) - 1/9 sin(3x) + ...)
+                // Our getWaveValue 'triangle' is (2/pi)*asin(cos(x)). 
+                // This is a triangle wave in phase with Cosine (starts at 1, goes down).
+                // Expansion: 8/pi^2 * (cos(x) + 1/9 cos(3x) + 1/25 cos(5x) ...)
+                // All positives? Let's verify.
+                // cos(0) + 1/9 + 1/25 = sum(1/odd^2) = pi^2/8.
+                // So yes, all positive cosine terms for a "Cosine-phase" triangle.
+                if (n % 2 !== 0) {
+                    amp = (8 / (Math.PI * Math.PI)) * (1 / (n * n));
+                }
+                break;
+            case 'sawtooth':
+                // Sawtooth (all harmonics): 2/pi * (sin(x) - 1/2 sin(2x) + 1/3 sin(3x) ...)
+                // Our getWaveValue 'sawtooth' is 2*(x - floor(x+0.5)). Ramps up.
+                // If we align to Cosine? Sawtooth is usually defined via sine.
+                // Let's just use 1/n scaling.
+                // If we want to match our visual sawtooth (which centers at 0 and goes -1 to 1 per period),
+                // The expansion is -2/pi * sum ( (-1)^k / k * sin(kx) )
+                // Audio quality: phase of harmonics affects timbre very little (Helmholtz).
+                // So amplitude 2/pi * 1/n is sufficient.
+                amp = (2 / Math.PI) * (1 / n);
+                break;
+        }
+        
+        if (amp !== 0) {
+            harmonics.push({ n, freq: freq * n, amp });
+        }
+        
+        n++;
+        // Limit to reasonable number to avoid performance hit (e.g. 50? or full spectra?)
+        // 50 x 3 comps = 150 oscs. Safe.
+        // If low freq (50Hz), nyquist 22k -> 400 harmonics. 400*3 = 1200. Might be slow.
+        // Limit to 100 harmonics.
+        if (n > 100) break;
+    }
+    return harmonics;
 }
 
 

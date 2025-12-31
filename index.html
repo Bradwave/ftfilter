@@ -67,7 +67,7 @@
                         <!-- Components injected here -->
                     </div>
                     <button id="add-component-btn" class="action-button">
-                        <span class="material-symbols-outlined">add</span> ADD SINE WAVE
+                        <span class="material-symbols-outlined">add</span> ADD WAVE
                     </button>
                 </div>
             </div>
@@ -86,6 +86,12 @@
                         <div style="font-size: 0.65rem; color: #888; margin-top: 4px; line-height: 1.2;">
                             Multiplies simulation frequency to make it audible.
                         </div>
+                    </div>
+                    
+                     <!-- Master Volume -->
+                    <div class="control-group">
+                        <div class="control-label">Master Volume (<span id="master-vol-display">0.5</span>)</div>
+                        <input type="range" id="master-vol-slider" min="0" max="1" value="0.5" step="0.05">
                     </div>
                 </div>
             </div>
@@ -122,6 +128,26 @@
                         <div class="control-label">Smoothing</div>
                         <input type="range" id="smoothing-slider" min="0" max="0.95" value="0" step="0.05">
                     </div>
+                </div>
+                </div>
+
+            
+            <!-- Import / Export (Collapsible) -->
+            <div class="section-header-collapsible" data-target="io-wrapper">
+                <div class="section-title" style="border:none; margin:0; padding:0;">Import / Export Signal</div>
+                <span class="material-symbols-outlined dropdown-icon">expand_more</span>
+            </div>
+
+            <div id="io-wrapper" class="collapsible-content expanded">
+                <div class="collapsible-inner">
+                    <button class="secondary btn-full-width" onclick="exportComponents()">
+                        <span class="material-symbols-outlined">download</span> EXPORT
+                    </button>
+                    <button class="secondary btn-full-width" style="margin-top: 8px;" onclick="triggerImport()">
+                        <span class="material-symbols-outlined">upload</span> IMPORT
+                    </button>
+                    <input type="file" id="import-file" style="display: none;" accept=".json"
+                        onchange="importComponents(this)">
                 </div>
             </div>
             
