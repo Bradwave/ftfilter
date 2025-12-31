@@ -8,13 +8,16 @@ class SignalComponent {
         // Real Mode Params
         this.startTime = 0;   // In seconds
         this.endTime = 5.0;   // Max duration (N=2048, Rate=256 -> 8s cap)
-        this.envelopeType = 'gaussian'; // 'gaussian' or 'adsr'
         this.envelopeParams = {
-            gaussian: { center: 0.5, width: 0.2 }, 
+            gaussian: { center: 0.5, width: 0.2 },
             adsr: { a: 0.1, d: 0.1, s: 0.5, r: 0.2 },
             square: {}
         };
         this.collapsed = false;
+        // Chirp
+        this.isChirp = false;
+        this.freqStart = 1;
+        this.freqEnd = 5;
     }
 }
 
@@ -48,6 +51,7 @@ const elements = {
     componentsToggle: document.getElementById('components-toggle'),
     componentsWrapper: document.getElementById('components-wrapper'),
     addComponentBtn: document.getElementById('add-component-btn'),
+    addChirpBtn: document.getElementById('add-chirp-btn'),
     filterWidthSlider: document.getElementById('filter-width-slider'),
     filterCenterSlider: document.getElementById('filter-center-slider'),
     filterCenterDisplay: document.getElementById('filter-center-display'),
@@ -73,7 +77,7 @@ elements.ctx.recon = elements.canvases.recon.getContext('2d');
 const STORAGE_KEY = 'ftfilter_state_v2';
 let audioCtx = null;
 let currentSource = null;
-let isPlaying = null; 
+let isPlaying = null;
 let lastFilteredFFT = null;
 let audioStartTime = 0; // New variable for sync
 
@@ -88,14 +92,14 @@ function init() {
 function updateToggleUI() {
     const ideal = document.getElementById('mode-ideal');
     const real = document.getElementById('mode-real');
-    if(ideal && real) {
+    if (ideal && real) {
         ideal.className = state.signalMode === 'ideal' ? 'segmented-option active' : 'segmented-option';
         real.className = state.signalMode === 'real' ? 'segmented-option active' : 'segmented-option';
     }
-    
+
     const square = document.getElementById('filter-square');
     const gaussian = document.getElementById('filter-gaussian');
-    if(square && gaussian) {
+    if (square && gaussian) {
         square.className = state.filterType === 'square' ? 'segmented-option active' : 'segmented-option';
         gaussian.className = state.filterType === 'gaussian' ? 'segmented-option active' : 'segmented-option';
     }
@@ -116,7 +120,7 @@ window.setFilterType = (type) => {
 
 function saveState() {
     const saved = {
-        components: state.components, 
+        components: state.components,
         filterCenter: state.filterCenter,
         filterWidth: state.filterWidth,
         timeBase: state.timeBase,
@@ -137,36 +141,39 @@ function loadState() {
             const parsed = JSON.parse(saved);
             state.components = parsed.components.map(c => {
                 const n = new SignalComponent(c.freq, c.amp);
-                n.id = c.id; 
+                n.id = c.id;
                 if (c.phase !== undefined) n.phase = c.phase;
                 if (c.waveType !== undefined) n.waveType = c.waveType;
                 // Restore new params
-                if(c.startTime !== undefined) n.startTime = c.startTime;
-                if(c.endTime !== undefined) n.endTime = c.endTime;
-                if(c.envelopeType) n.envelopeType = c.envelopeType;
-                if(c.envelopeParams) {
+                if (c.startTime !== undefined) n.startTime = c.startTime;
+                if (c.endTime !== undefined) n.endTime = c.endTime;
+                if (c.envelopeType) n.envelopeType = c.envelopeType;
+                if (c.envelopeParams) {
                     // Merge params to ensure new defaults (like square) are present
                     n.envelopeParams = {
                         ...n.envelopeParams,
                         ...c.envelopeParams
                     };
                 }
+                if (c.isChirp) n.isChirp = true;
+                if (c.freqStart !== undefined) n.freqStart = c.freqStart;
+                if (c.freqEnd !== undefined) n.freqEnd = c.freqEnd;
                 return n;
             });
-            if(parsed.filterCenter !== undefined) state.filterCenter = parsed.filterCenter;
-            if(parsed.filterWidth !== undefined) state.filterWidth = parsed.filterWidth;
-            if(parsed.timeBase !== undefined) state.timeBase = parsed.timeBase;
-            if(parsed.showAxis !== undefined) state.showAxis = parsed.showAxis;
-            
-            // New State
-            if(parsed.zoomStart !== undefined) state.zoomStart = parsed.zoomStart;
-            if(parsed.zoomEnd !== undefined) state.zoomEnd = parsed.zoomEnd;
+            if (parsed.filterCenter !== undefined) state.filterCenter = parsed.filterCenter;
+            if (parsed.filterWidth !== undefined) state.filterWidth = parsed.filterWidth;
+            if (parsed.timeBase !== undefined) state.timeBase = parsed.timeBase;
+            if (parsed.showAxis !== undefined) state.showAxis = parsed.showAxis;
 
-            if(parsed.smoothing !== undefined) state.smoothing = parsed.smoothing;
-            if(parsed.signalMode !== undefined) state.signalMode = parsed.signalMode;
-            if(parsed.filterType !== undefined) state.filterType = parsed.filterType;
-            if(parsed.audioMultiplier !== undefined) state.audioMultiplier = parsed.audioMultiplier;
-            
+            // New State
+            if (parsed.zoomStart !== undefined) state.zoomStart = parsed.zoomStart;
+            if (parsed.zoomEnd !== undefined) state.zoomEnd = parsed.zoomEnd;
+
+            if (parsed.smoothing !== undefined) state.smoothing = parsed.smoothing;
+            if (parsed.signalMode !== undefined) state.signalMode = parsed.signalMode;
+            if (parsed.filterType !== undefined) state.filterType = parsed.filterType;
+            if (parsed.audioMultiplier !== undefined) state.audioMultiplier = parsed.audioMultiplier;
+
             // Sync UI inputs
             elements.filterCenterSlider.value = state.filterCenter;
             elements.filterWidthSlider.value = state.filterWidth;
@@ -174,19 +181,19 @@ function loadState() {
             elements.axisToggle.checked = state.showAxis;
             elements.smoothingSlider.value = state.smoothing;
             elements.filterCenterDisplay.innerText = state.filterCenter.toFixed(1) + " Hz";
-            if(elements.audioMultSlider) {
+            if (elements.audioMultSlider) {
                 elements.audioMultSlider.value = state.audioMultiplier;
                 elements.audioMultDisplay.innerText = state.audioMultiplier;
             }
-            if(parsed.masterVolume !== undefined) {
-                 state.masterVolume = parsed.masterVolume;
-                 const mv = document.getElementById('master-vol-slider');
-                 if(mv) {
-                     mv.value = state.masterVolume;
-                     document.getElementById('master-vol-display').innerText = state.masterVolume;
-                 }
+            if (parsed.masterVolume !== undefined) {
+                state.masterVolume = parsed.masterVolume;
+                const mv = document.getElementById('master-vol-slider');
+                if (mv) {
+                    mv.value = state.masterVolume;
+                    document.getElementById('master-vol-display').innerText = state.masterVolume;
+                }
             }
-        } catch(e) { console.error("Failed to load state", e); }
+        } catch (e) { console.error("Failed to load state", e); }
     }
 }
 
@@ -197,10 +204,10 @@ function setupListeners() {
             const targetId = header.getAttribute('data-target');
             const content = targetId ? document.getElementById(targetId) : null;
             if (!content) return;
-            
+
             const icon = header.querySelector('.dropdown-icon');
             content.classList.toggle('expanded');
-            
+
             if (content.classList.contains('expanded')) {
                 icon.style.transform = "rotate(0deg)";
             } else {
@@ -216,9 +223,9 @@ function setupListeners() {
         volSlider.value = state.masterVolume;
         volDisplay.textContent = state.masterVolume;
         volSlider.addEventListener('input', (e) => {
-             state.masterVolume = parseFloat(e.target.value);
-             volDisplay.textContent = state.masterVolume;
-             saveState();
+            state.masterVolume = parseFloat(e.target.value);
+            volDisplay.textContent = state.masterVolume;
+            saveState();
         });
     }
 
@@ -227,6 +234,18 @@ function setupListeners() {
         renderComponentsUI();
         saveState();
     });
+
+    if (elements.addChirpBtn) {
+        elements.addChirpBtn.addEventListener('click', () => {
+            const c = new SignalComponent(1, 1.0);
+            c.isChirp = true;
+            c.freqStart = 2;
+            c.freqEnd = 10;
+            state.components.push(c);
+            renderComponentsUI();
+            saveState();
+        });
+    }
 
     elements.axisToggle.addEventListener('change', (e) => {
         state.showAxis = e.target.checked;
@@ -269,7 +288,7 @@ function setupListeners() {
         state.zoomEnd = 5;
         state.showAxis = true;
         state.smoothing = 0;
-        
+
         elements.filterCenterSlider.value = 5;
         elements.filterWidthSlider.value = 2;
         elements.axisToggle.checked = true;
@@ -280,14 +299,14 @@ function setupListeners() {
     });
 
     // Interaction on frequency canvas (freqCanvas logic remains the same)
-    const freqCanvas = elements.canvases.freq; 
-    
+    const freqCanvas = elements.canvases.freq;
+
     freqCanvas.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         const rect = freqCanvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const width = rect.width; 
-        
+        const width = rect.width;
+
         const maxFreq = state.sampleRate / 2;
         const clickedFreq = (x / width) * maxFreq;
 
@@ -295,25 +314,25 @@ function setupListeners() {
         if (clickedFreq >= state.filterCenter - halfWidth && clickedFreq <= state.filterCenter + halfWidth) {
             state.isDraggingFilter = true;
         } else {
-             state.filterCenter = clickedFreq;
-             state.isDraggingFilter = true;
-             updateFilterUI();
-             saveState();
+            state.filterCenter = clickedFreq;
+            state.isDraggingFilter = true;
+            updateFilterUI();
+            saveState();
         }
     });
 
     window.addEventListener('pointermove', (e) => {
         if (!state.isDraggingFilter) return;
-        e.preventDefault(); 
+        e.preventDefault();
         const rect = freqCanvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const width = rect.width;
-        
+
         const maxFreq = state.sampleRate / 2;
         let newFreq = (x / width) * maxFreq;
-        
+
         newFreq = Math.max(0, Math.min(newFreq, maxFreq));
-        
+
         state.filterCenter = newFreq;
         updateFilterUI();
     });
@@ -333,18 +352,21 @@ function updateFilterUI() {
 
 function renderComponentsUI() {
     elements.componentsContainer.innerHTML = '';
-    
+
     // Determine max time for sliders (4s default)
     const MAX_DURATION = 5.0;
 
     state.components.forEach((comp, index) => {
         const el = document.createElement('div');
         el.className = 'component-row';
-        
+        if (comp.isChirp && state.signalMode !== 'real') {
+            el.style.opacity = '0.4';
+        }
+
         if (comp.collapsed) {
-             html = `
+            html = `
             <div class="component-header">
-                <span>WAVE ${index + 1}</span>
+                <span>${comp.isChirp ? 'CHIRP' : 'WAVE'} ${index + 1}</span>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <span class="material-symbols-outlined remove-btn" style="font-size: 18px;" onclick="window.toggleCollapse('${comp.id}')">expand_more</span>
                     <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
@@ -355,9 +377,9 @@ function renderComponentsUI() {
             </div>
             `;
         } else {
-             html = `
+            html = `
             <div class="component-header">
-                <span>WAVE ${index + 1}</span>
+                <span>${comp.isChirp ? 'CHIRP' : 'WAVE'} ${index + 1}</span>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <span class="material-symbols-outlined remove-btn" style="font-size: 18px;" onclick="window.toggleCollapse('${comp.id}')">expand_less</span>
                     <span class="material-symbols-outlined remove-btn" style="font-size: 16px;" onclick="removeComponent(${index})">close</span>
@@ -369,6 +391,24 @@ function renderComponentsUI() {
                     <canvas id="exp-col-prev-${comp.id}" width="300" height="40" style="width:100%; height:40px; display:block;"></canvas>
                 </div>
                 <div class="component-controls">
+                    ${comp.isChirp ? `
+                    <div class="component-control-item">
+                        <div class="component-slider-wrapper">
+                            <span class="component-label">START FREQ</span>
+                            <input type="range" class="compact-range" value="${comp.freqStart}" min="0.5" max="50" step="0.5" 
+                                oninput="updateComponent('${comp.id}', 'freqStart', this.value)">
+                        </div>
+                        <div id="fs-val-${comp.id}" class="component-value">${comp.freqStart} Hz</div>
+                    </div>
+                    <div class="component-control-item">
+                        <div class="component-slider-wrapper">
+                            <span class="component-label">END FREQ</span>
+                            <input type="range" class="compact-range" value="${comp.freqEnd}" min="0.5" max="50" step="0.5" 
+                                oninput="updateComponent('${comp.id}', 'freqEnd', this.value)">
+                        </div>
+                        <div id="fe-val-${comp.id}" class="component-value">${comp.freqEnd} Hz</div>
+                    </div>
+                    ` : `
                     <!-- Wave Type Selector -->
                     <div class="component-control-item" style="grid-column: span 2;">
                         <div class="segmented-control" style="margin-bottom: 0;">
@@ -388,6 +428,7 @@ function renderComponentsUI() {
                         </div>
                         <div id="f-val-${comp.id}" class="component-value">${comp.freq} Hz</div>
                     </div>
+                    `}
 
                     <!-- Amp & Phase -->
                     <div class="component-control-item">
@@ -414,9 +455,9 @@ function renderComponentsUI() {
                 </div>
         `;
 
-        // Real Mode Extensions for Expanded View
-        if (state.signalMode === 'real') {
-             html += `
+            // Real Mode Extensions for Expanded View
+            if (state.signalMode === 'real') {
+                html += `
                 <!-- Time Constraints -->
                 <div style="margin-top: 8px;">
                     <div class="component-label" id="time-label-${comp.id}">
@@ -424,7 +465,7 @@ function renderComponentsUI() {
                     </div>
                     <div class="double-slider-wrapper">
                         <div class="double-slider-track"></div>
-                        <div class="double-slider-fill" style="left: ${(comp.startTime/MAX_DURATION)*100}%; width: ${((comp.endTime-comp.startTime)/MAX_DURATION)*100}%"></div>
+                        <div class="double-slider-fill" style="left: ${(comp.startTime / MAX_DURATION) * 100}%; width: ${((comp.endTime - comp.startTime) / MAX_DURATION) * 100}%"></div>
                         <input type="range" class="double-slider-input" min="0" max="${MAX_DURATION}" step="0.1" value="${comp.startTime}" 
                             oninput="updateTimeConstraint('${comp.id}', 'start', this.value)">
                         <input type="range" class="double-slider-input" min="0" max="${MAX_DURATION}" step="0.1" value="${comp.endTime}" 
@@ -437,9 +478,9 @@ function renderComponentsUI() {
                     <div class="envelope-header">
                          <span class="component-label">ENVELOPE</span>
                          <div class="segmented-control envelope-type-control">
-                            <div class="segmented-option ${comp.envelopeType==='gaussian'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
-                            <div class="segmented-option ${comp.envelopeType==='adsr'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
-                            <div class="segmented-option ${comp.envelopeType==='square'?'active':''}" onclick="setEnvelopeType('${comp.id}', 'square')">SQR</div>
+                            <div class="segmented-option ${comp.envelopeType === 'gaussian' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'gaussian')">GAUSS</div>
+                            <div class="segmented-option ${comp.envelopeType === 'adsr' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'adsr')">ADSR</div>
+                            <div class="segmented-option ${comp.envelopeType === 'square' ? 'active' : ''}" onclick="setEnvelopeType('${comp.id}', 'square')">SQR</div>
                         </div>
                     </div>
                     
@@ -450,16 +491,16 @@ function renderComponentsUI() {
                     </div>
                 </div>
              `;
-        }
+            }
 
-        html += `</div>`; // Close component-body
+            html += `</div>`; // Close component-body
         } // End else/expanded
-        
+
         el.innerHTML = html;
         elements.componentsContainer.appendChild(el);
-        
+
         if (comp.collapsed) {
-             drawCollapsedPreview(document.getElementById(`col-prev-${comp.id}`), comp);
+            drawCollapsedPreview(document.getElementById(`col-prev-${comp.id}`), comp);
         } else {
             // Draw Previews
             drawComponentPreview(document.getElementById(`preview-${comp.id}`), comp);
@@ -511,12 +552,91 @@ function getEnvelopeControls(comp) {
 }
 
 // Logic Helpers
+window.updateComponent = (id, key, value) => {
+    const comp = state.components.find(x => x.id === id);
+    if (!comp) return;
+
+    comp[key] = parseFloat(value);
+
+    // Update Value Display
+    let valId = '';
+    if (key === 'freq') valId = `f-val-${id}`;
+    if (key === 'amp') valId = `a-val-${id}`;
+    if (key === 'phase') valId = `p-val-${id}`;
+    if (key === 'freqStart') valId = `fs-val-${id}`;
+    if (key === 'freqEnd') valId = `fe-val-${id}`;
+
+    const valEl = document.getElementById(valId);
+    if (valEl) {
+        let suffix = '';
+        if (key.includes('freq')) suffix = ' Hz';
+        if (key === 'phase') suffix = ' rad';
+        if (key === 'phase') valEl.innerText = comp[key].toFixed(2) + suffix;
+        else valEl.innerText = comp[key] + suffix;
+    }
+
+    saveState();
+
+    // Update Previews
+    const prevCanvas = document.getElementById(`preview-${id}`);
+    if (prevCanvas) drawComponentPreview(prevCanvas, comp);
+    
+    const expCollCanvas = document.getElementById(`exp-col-prev-${id}`);
+    if (expCollCanvas) drawCollapsedPreview(expCollCanvas, comp);
+    
+    const collCanvas = document.getElementById(`col-prev-${id}`);
+    if (collCanvas) drawCollapsedPreview(collCanvas, comp);
+
+    const envCanvas = document.getElementById(`env-prev-${id}`);
+    if (envCanvas && state.signalMode === 'real') drawEnvelopePreview(envCanvas, comp);
+};
+
+window.setWaveType = (id, type) => {
+    const comp = state.components.find(x => x.id === id);
+    if (comp) {
+        comp.waveType = type;
+        renderComponentsUI();
+        saveState();
+    }
+};
+
+window.setEnvelopeType = (id, type) => {
+    const comp = state.components.find(x => x.id === id);
+    if (comp) {
+        comp.envelopeType = type;
+        if (!comp.envelopeParams) comp.envelopeParams = {};
+        if (!comp.envelopeParams.gaussian) comp.envelopeParams.gaussian = { center: 0.5, width: 0.2 };
+        if (!comp.envelopeParams.adsr) comp.envelopeParams.adsr = { a: 0.1, d: 0.1, s: 0.5, r: 0.2 };
+
+        renderComponentsUI();
+        saveState();
+    }
+};
+
+window.updateEnvParam = (id, type, key, value) => {
+    const comp = state.components.find(x => x.id === id);
+    if (comp && comp.envelopeParams[type]) {
+        comp.envelopeParams[type][key] = parseFloat(value);
+        saveState();
+
+        // Update Previews
+        const envCanvas = document.getElementById(`env-prev-${id}`);
+        if (envCanvas) drawEnvelopePreview(envCanvas, comp);
+        const expCollCanvas = document.getElementById(`exp-col-prev-${id}`);
+        if (expCollCanvas) drawCollapsedPreview(expCollCanvas, comp);
+        const collCanvas = document.getElementById(`col-prev-${id}`);
+        if (collCanvas) drawCollapsedPreview(collCanvas, comp);
+        const prevCanvas = document.getElementById(`preview-${id}`);
+        if (prevCanvas && state.signalMode === 'real') drawComponentPreview(prevCanvas, comp);
+    }
+};
+
 window.updateTimeConstraint = (id, type, value) => {
     const comp = state.components.find(c => c.id === id);
-    if(!comp) return;
-    
+    if (!comp) return;
+
     value = parseFloat(value);
-    
+
     // Pushing Logic: allow start to push end, and vice versa
     if (type === 'start') {
         if (value >= comp.endTime) {
@@ -524,7 +644,7 @@ window.updateTimeConstraint = (id, type, value) => {
             comp.endTime = Math.min(value + 0.1, 5.0); // MAX_DURATION 5.0 hardcoded here
             // If hit max duration, clamp start value to maintain diff
             if (comp.endTime === 5.0) {
-                 if (value > 4.9) value = 4.9;
+                if (value > 4.9) value = 4.9;
             }
         }
         comp.startTime = value;
@@ -535,43 +655,48 @@ window.updateTimeConstraint = (id, type, value) => {
             comp.startTime = Math.max(value - 0.1, 0);
             // If hit min duration, clamp end value
             if (comp.startTime === 0) {
-                 if (value < 0.1) value = 0.1;
+                if (value < 0.1) value = 0.1;
             }
         }
-        comp.endTime = value; 
+        comp.endTime = value;
     }
-    
+
     // OPTIMIZED UPDATE: Do NOT re-render UI. Update elements manually.
     const previewCanvas = document.getElementById(`preview-${comp.id}`);
     if (previewCanvas) {
-         const wrapper = previewCanvas.closest('.component-body');
-         if (wrapper) {
-             const trackFill = wrapper.querySelector('.double-slider-fill');
-             const inputs = wrapper.querySelectorAll('.double-slider-input');
-             
-             // Update Fill
-             const MAX = 5.0;
-             const left = (comp.startTime / MAX) * 100;
-             const width = ((comp.endTime - comp.startTime) / MAX) * 100;
-             if(trackFill) {
-                 trackFill.style.left = left + '%';
-                 trackFill.style.width = width + '%';
-             }
-             
-             // Update Input Values if pushed (sync sibling)
-             if (inputs.length === 2) {
-                 if (type === 'start') inputs[1].value = comp.endTime;
-                 else inputs[0].value = comp.startTime;
-             }
-             
-             // Update Label Text
-             const label = document.getElementById(`time-label-${comp.id}`);
-             if (label) {
-                 label.innerHTML = `TIME CONSTRAINT (${comp.startTime.toFixed(2)}s - ${comp.endTime.toFixed(2)}s)`;
-             }
-         }
+        const wrapper = previewCanvas.closest('.component-body');
+        if (wrapper) {
+            const trackFill = wrapper.querySelector('.double-slider-fill');
+            const inputs = wrapper.querySelectorAll('.double-slider-input');
+
+            // Update Fill
+            const MAX = 5.0;
+            const left = (comp.startTime / MAX) * 100;
+            const width = ((comp.endTime - comp.startTime) / MAX) * 100;
+            if (trackFill) {
+                trackFill.style.left = left + '%';
+                trackFill.style.width = width + '%';
+            }
+
+            // Update Input Values if pushed (sync sibling)
+            if (inputs.length === 2) {
+                if (type === 'start') inputs[1].value = comp.endTime;
+                else inputs[0].value = comp.startTime;
+            }
+
+            // Update Label Text
+            const label = document.getElementById(`time-label-${comp.id}`);
+            if (label) {
+                label.innerHTML = `TIME CONSTRAINT (${comp.startTime.toFixed(2)}s - ${comp.endTime.toFixed(2)}s)`;
+            }
+        }
     }
-    saveState();
+    
+    drawCollapsedPreview(document.getElementById(`col-prev-${comp.id}`), comp);
+    drawCollapsedPreview(document.getElementById(`exp-col-prev-${comp.id}`), comp);
+    const prevCanvas = document.getElementById(`preview-${comp.id}`);
+    if (prevCanvas) drawComponentPreview(prevCanvas, comp);
+
     saveState();
 };
 
@@ -589,10 +714,11 @@ function drawCollapsedPreview(canvas, comp) {
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     const r = canvas.getBoundingClientRect();
-    if(canvas.width !== Math.round(r.width * dpr)) {
+    if (canvas.width !== Math.round(r.width * dpr)) {
         canvas.width = r.width * dpr;
         canvas.height = r.height * dpr;
     }
+    ctx.resetTransform(); // FIX: Reset before scaling to prevent accumulation
     ctx.scale(dpr, dpr);
     const w = r.width;
     const h = r.height;
@@ -601,16 +727,16 @@ function drawCollapsedPreview(canvas, comp) {
     ctx.beginPath();
     ctx.strokeStyle = '#1484e6';
     ctx.lineWidth = 1.5;
-    
+
     // Draw 0 to 5s timeline
     const MAX = 5.0;
     const yBase = h / 2;
-    const yScale = h / 2.5; 
-    
+    const yScale = h / 2.5;
+
     for (let i = 0; i <= w; i++) {
         const t = (i / w) * MAX;
         let val = 0;
-        
+
         // Time Constraint & Envelope Logic similar to signal gen
         // FTFilter has signalMode. If complex, envelopes might not apply? 
         // User said "taking into account the time constrait" which usually implies Real mode in FTFilter.
@@ -618,7 +744,7 @@ function drawCollapsedPreview(canvas, comp) {
         // FTFilter usually forces meaningful envelopes only in Real mode.
         // However, the collapsed state might exist in both modes.
         // Let's stick to the logic: if Real mode, apply constraints.
-        
+
         if (state.signalMode === 'real') {
             if (t >= comp.startTime && t <= comp.endTime) {
                 const duration = comp.endTime - comp.startTime;
@@ -627,63 +753,62 @@ function drawCollapsedPreview(canvas, comp) {
                     const tNorm = (t - comp.startTime) / duration;
                     env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
                 }
-                const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+
+                let carrier = 0;
+                if (comp.isChirp) {
+                    const k = (comp.freqEnd - comp.freqStart) / (duration || 1);
+                    const dt = t - comp.startTime;
+                    const phase = 2 * Math.PI * (comp.freqStart * dt + 0.5 * k * dt * dt) + (comp.phase || 0);
+                    carrier = Math.cos(phase);
+                } else {
+                    carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+                }
                 val = carrier * env * comp.amp;
             }
         } else {
-             // Complex mode (no time constraints visually usually, or full duration)
-             const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
-             val = carrier * comp.amp;
+            // Complex mode
+            if (comp.isChirp) {
+                val = 0; // Transparent implies inactive? User said "added to signal only when real...". 
+                // So effectively 0 in complex mode.
+            } else {
+                const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+                val = carrier * comp.amp;
+            }
         }
-        
+
         const y = yBase - val * yScale;
-        
+
         if (i === 0) ctx.moveTo(i, y);
         else ctx.lineTo(i, y);
     }
     ctx.stroke();
 }
 
-window.setEnvelopeType = (id, type) => {
-    const comp = state.components.find(c => c.id === id);
-    if(comp) {
-        comp.envelopeType = type;
-        renderComponentsUI();
-        saveState();
-    }
-};
-
-window.updateEnvParam = (id, type, param, value) => {
-    const comp = state.components.find(c => c.id === id);
-    if(comp) {
-        comp.envelopeParams[type][param] = parseFloat(value);
-        saveState();
-        drawEnvelopePreview(document.getElementById(`env-prev-${id}`), comp);
-    }
-};
+// DELETED DUPLICATE setEnvelopeType and updateEnvParam
+// They are correctly defined above around lines 603 and 616.
 
 function drawEnvelopePreview(canvas, comp) {
-    if(!canvas) return;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     // Resize check standard
     const rect = canvas.getBoundingClientRect();
-    if(canvas.width !== Math.round(rect.width * dpr)) {
-         canvas.width = Math.round(rect.width * dpr);
-         canvas.height = Math.round(rect.height * dpr);
+    if (canvas.width !== Math.round(rect.width * dpr)) {
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
     }
     ctx.resetTransform();
     ctx.scale(dpr, dpr);
-    
+
     const w = rect.width;
     const h = rect.height;
     ctx.clearRect(0, 0, w, h);
-    
+
     // Background Line
     ctx.beginPath();
     ctx.strokeStyle = '#eee';
-    ctx.moveTo(0, h); ctx.lineTo(w, h); 
-    ctx.moveTo(0, 0); ctx.lineTo(w, 0); 
+    ctx.moveTo(0, h); ctx.lineTo(w, h);
+    ctx.moveTo(0, 0); ctx.lineTo(w, 0);
     ctx.stroke();
 
     // Enveloped Wave Preview (Transparent Light Blue)
@@ -691,20 +816,25 @@ function drawEnvelopePreview(canvas, comp) {
     ctx.beginPath();
     ctx.strokeStyle = 'rgba(135, 206, 250, 0.4)';
     ctx.lineWidth = 1;
-    for(let i=0; i<=w; i++) {
+    for (let i = 0; i <= w; i++) {
         const tNorm = i / w; // 0 to 1
         const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
-        // Note: tNorm is 0..1 (envelope space). Carrier depends on Time.
-        // Assuming Preview covers 0..1s or full duration?
-        // In fourier3d preview, t goes 0..1 (previewTime).
-        // Let's use standard preview time logic:
-        // Actually fourier3d drawEnvelopePreview loops x=0..w, t=x/w.
+
+        // Chirp Preview Logic
         const t = tNorm; // 1s preview
-        const carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+        let carrier = 0;
+        if (comp.isChirp) {
+            const k = (comp.freqEnd - comp.freqStart) / 1.0;
+            const phase = 2 * Math.PI * (comp.freqStart * t + 0.5 * k * t * t) + (comp.phase || 0);
+            carrier = Math.cos(phase);
+        } else {
+            carrier = getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+        }
+
         const val = Math.abs(carrier) * env;
-        
-        const y = h - (val * h * 0.9) - 2; 
-        if (i===0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
+
+        const y = h - (val * h * 0.9) - 2;
+        if (i === 0) ctx.moveTo(i, y); else ctx.lineTo(i, y);
     }
     ctx.stroke();
 
@@ -712,16 +842,16 @@ function drawEnvelopePreview(canvas, comp) {
     ctx.beginPath();
     ctx.strokeStyle = '#1484e6';
     ctx.lineWidth = 2;
-    
+
     const samples = 100;
-    for(let i=0; i<=samples; i++) {
-        const tNorm = i / samples; 
+    for (let i = 0; i <= samples; i++) {
+        const tNorm = i / samples;
         const val = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
-        
+
         const x = tNorm * w;
         const y = h - (val * h * 0.9) - 2; // Margin
-        
-        if (i===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
 }
@@ -739,7 +869,7 @@ function getEnvelopeValue(tNorm, type, params) {
         const t = tNorm; // alias
         if (t < p.a) {
             return t / p.a;
-        } 
+        }
         else if (t < p.a + p.d) {
             const tDec = t - p.a;
             const prog = tDec / p.d;
@@ -762,32 +892,46 @@ function drawComponentPreview(canvas, comp) {
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
-    
+
     const ctx = canvas.getContext('2d');
+    ctx.resetTransform(); // FIX: Reset before scaling to prevent accumulation
     ctx.scale(dpr, dpr);
     const w = rect.width;
     const h = rect.height;
-    
+
     // Clear
     ctx.clearRect(0, 0, w, h);
-    
+
     // Draw Sine
     ctx.beginPath();
     ctx.strokeStyle = '#1484e6';
     ctx.lineWidth = 2; // Thicker line
     ctx.lineJoin = 'round';
-    
-    const previewTime = 1.0; 
-    
+
+    const previewTime = 1.0;
+
     // Draw logic
-    ctx.moveTo(0, h/2); // Start middle
+    ctx.moveTo(0, h / 2); // Start middle
     for (let x = 0; x <= w; x++) {
         const t = (x / w) * previewTime;
-        const val = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
-        // Scale: Max amp 2.0 covers most of height
-        // height is 28. amp=2 -> range -2..2 is 4. scale factor?
-        // Let's just scale such that amp=2.5 fills height.
-        const y = h/2 - (val / 2.5) * (h/2);
+        let val = 0;
+
+        if (comp.isChirp) {
+            // Preview logic for chirp (always show regardless of mode?)
+            // "in ftfilter, chirps are displayed in added to the signal only when real signal mode is active, otherwise they are made transparent in the list of waves"
+            // But previews should probably still show what it is.
+            // Let's draw it.
+            const k = (comp.freqEnd - comp.freqStart) / previewTime; // Assume preview spans the sweep visually? Or fix constraints?
+            // Chirps usually depend on absolute time relative to start.
+            // But for preview, we just show a sweep across the preview window.
+            const phase = 2 * Math.PI * (comp.freqStart * t + 0.5 * k * t * t) + (comp.phase || 0);
+            val = comp.amp * Math.cos(phase);
+        } else {
+            val = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+        }
+
+        // Scale
+        const y = h / 2 - (val / 2.5) * (h / 2);
         ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -799,29 +943,21 @@ window.removeComponent = (index) => {
     saveState();
 };
 
-window.updateComponent = (id, prop, value) => {
-    const comp = state.components.find(c => c.id === id);
-    if (comp) {
-        comp[prop] = parseFloat(value);
-        const valEl = document.getElementById((prop === 'freq' ? 'f-val-' : (prop === 'amp' ? 'a-val-' : 'p-val-')) + id);
-        if (valEl) {
-            let label = value;
-            if (prop === 'freq') label += ' Hz';
-            else if (prop === 'phase') label = parseFloat(value).toFixed(2) + ' rad';
-            valEl.innerText = label;
-        }
-            
-        // Redraw preview
-        const previewCanvas = document.getElementById(`preview-${comp.id}`);
-        if(previewCanvas) drawComponentPreview(previewCanvas, comp);
-        
-        saveState();
-    }
-};
+// Removed duplicate updateComponent
+// window.updateComponent is handled above around line 555 now.
+// Wait, I should probably keep one and remove the other.
+// Lines 555-585 looked like a "Logic Helpers" section.
+// Lines 951-970 looked like main logic.
+// I will keep the one at 555 and DELETE this one at 951 since I improved 555 in the previous chunk?
+// Actually, looking at 555 in previous turn, it had `key` and `value` args.
+// Line 951 has `prop` and `value`.
+// The calls in HTML are `updateComponent('${comp.id}', 'freqStart', this.value)`.
+// Both serve the same purpose.
+// I'll delete this one to respect the one I just edited at 555-ish.
 
 window.setWaveType = (id, type) => {
     const comp = state.components.find(c => c.id === id);
-    if(comp) {
+    if (comp) {
         comp.waveType = type;
         renderComponentsUI();
         saveState();
@@ -877,13 +1013,13 @@ function fft(data) {
         const oddRe = oddFFT[k].re * re - oddFFT[k].im * im;
         const oddIm = oddFFT[k].re * im + oddFFT[k].im * re;
 
-        result[k] = { 
-            re: evenFFT[k].re + oddRe, 
-            im: evenFFT[k].im + oddIm 
+        result[k] = {
+            re: evenFFT[k].re + oddRe,
+            im: evenFFT[k].im + oddIm
         };
-        result[k + N / 2] = { 
-            re: evenFFT[k].re - oddRe, 
-            im: evenFFT[k].im - oddIm 
+        result[k + N / 2] = {
+            re: evenFFT[k].re - oddRe,
+            im: evenFFT[k].im - oddIm
         };
     }
     return result;
@@ -894,13 +1030,13 @@ function ifft(data) {
     const N = data.length;
     // Conjugate input
     const conjugate = data.map(c => ({ re: c.re, im: -c.im }));
-    
+
     // Forward FFT
     const transform = fft(conjugate);
-    
+
     // Conjugate result and scale
-    return transform.map(c => ({ 
-        re: c.re / N, 
+    return transform.map(c => ({
+        re: c.re / N,
         im: -c.im / N // Conjugate again (and / N)
     }));
 }
@@ -910,7 +1046,7 @@ function animate() {
 
     // Resize canvases with DPI Support
     const dpr = window.devicePixelRatio || 1;
-    
+
     Object.values(elements.canvases).forEach(canvas => {
         const rect = canvas.parentElement.getBoundingClientRect();
         const ctx = canvas.getContext('2d');
@@ -925,70 +1061,90 @@ function animate() {
     });
 
     // 1. Generate Signal
-    const N = 2048; 
+    const N = 2048;
     const signalData = [];
     const timeData = [];
 
     for (let i = 0; i < N; i++) {
         const t = i / state.sampleRate;
         let val = 0;
-        
+
         state.components.forEach(comp => {
-            let compVal = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
-            
-            if (state.signalMode === 'real') {
-                if (t < comp.startTime || t > comp.endTime) {
-                    compVal = 0;
-                } else {
-                    const duration = comp.endTime - comp.startTime;
-                    if (duration > 0.01) {
-                        const tNorm = (t - comp.startTime) / duration;
-                        const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
-                        compVal *= env;
+            let compVal = 0;
+
+            if (comp.isChirp) {
+                if (state.signalMode === 'real') {
+                    if (t >= comp.startTime && t <= comp.endTime) {
+                        const duration = comp.endTime - comp.startTime;
+                        const dt = t - comp.startTime;
+                        if (duration > 0.0001) {
+                            const k = (comp.freqEnd - comp.freqStart) / duration;
+                            const phase = 2 * Math.PI * (comp.freqStart * dt + 0.5 * k * dt * dt) + (comp.phase || 0);
+                            let env = 1;
+                            const tNorm = dt / duration;
+                            env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+
+                            compVal = comp.amp * Math.cos(phase) * env;
+                        }
+                    }
+                }
+            } else {
+                compVal = comp.amp * getWaveValue(t, comp.freq, comp.phase || 0, comp.waveType || 'sine');
+
+                if (state.signalMode === 'real') {
+                    if (t < comp.startTime || t > comp.endTime) {
+                        compVal = 0;
+                    } else {
+                        const duration = comp.endTime - comp.startTime;
+                        if (duration > 0.01) {
+                            const tNorm = (t - comp.startTime) / duration;
+                            const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                            compVal *= env;
+                        }
                     }
                 }
             }
             val += compVal;
         });
-        signalData.push({ re: val, im: 0 }); 
+        signalData.push({ re: val, im: 0 });
         timeData.push({ t, val });
     }
 
     // 2. Compute FFT
     const fftData = fft(signalData);
-    
+
     // 3. Apply Filter
     const filteredFFT = [];
     const freqs = [];
-    
+
     for (let k = 0; k < N; k++) {
         let f = k * state.sampleRate / N;
-        if (k > N/2) f = (k - N) * state.sampleRate / N; 
-        
-        const mag = Math.sqrt(fftData[k].re**2 + fftData[k].im**2);
+        if (k > N / 2) f = (k - N) * state.sampleRate / N;
+
+        const mag = Math.sqrt(fftData[k].re ** 2 + fftData[k].im ** 2);
         const absF = Math.abs(f);
-        
+
         const displayMag = state.signalMode === 'real' ? mag * 2.5 : mag;
-        freqs.push({ f: absF, mag: displayMag }); 
+        freqs.push({ f: absF, mag: displayMag });
 
         let response = 0;
-        
+
         if (state.filterType === 'square') {
-             if (absF >= (state.filterCenter - state.filterWidth/2) && 
-                 absF <= (state.filterCenter + state.filterWidth/2)) {
-                 response = 1;
-             }
+            if (absF >= (state.filterCenter - state.filterWidth / 2) &&
+                absF <= (state.filterCenter + state.filterWidth / 2)) {
+                response = 1;
+            }
         } else {
             // Gaussian: Sigma = Width / 4
-            const sigma = Math.max(0.1, state.filterWidth / 4); 
+            const sigma = Math.max(0.1, state.filterWidth / 4);
             const num = Math.pow(absF - state.filterCenter, 2);
             const den = 2 * Math.pow(sigma, 2);
             response = Math.exp(-num / den);
         }
 
-        filteredFFT.push({ 
-            re: fftData[k].re * response, 
-            im: fftData[k].im * response 
+        filteredFFT.push({
+            re: fftData[k].re * response,
+            im: fftData[k].im * response
         });
     }
 
@@ -997,10 +1153,10 @@ function animate() {
 
     // Capture for Audio
     lastFilteredFFT = filteredFFT;
-    
+
     const reconPlotData = reconstructedData.map((c, i) => ({
         t: i / state.sampleRate,
-        val: c.re 
+        val: c.re
     }));
 
     // Audio Playback Time Sync
@@ -1009,8 +1165,8 @@ function animate() {
     if (isPlaying && audioCtx) {
         const t = audioCtx.currentTime - audioStartTime;
         if (t <= 5.0) { // Max duration
-             if (isPlaying === 'original') pbTimeOriginal = t;
-             else if (isPlaying === 'reconstructed') pbTimeRecon = t;
+            if (isPlaying === 'original') pbTimeOriginal = t;
+            else if (isPlaying === 'reconstructed') pbTimeRecon = t;
         }
     }
 
@@ -1023,7 +1179,7 @@ function animate() {
     // 6. Draw
     drawSignalNew(elements.ctx.signal, timeData, false, pbTimeOriginal);
     drawSpectrum(elements.ctx.freq, freqs, N);
-    
+
     drawSignalNew(elements.ctx.recon, reconPlotData, true, pbTimeRecon);
 }
 
@@ -1043,13 +1199,13 @@ function drawAxis(ctx, xMax, yMax, xLabel) { // Removed 'yLabel' unused
     const currentDPR = window.devicePixelRatio || 1;
     const w = ctx.canvas.width / currentDPR;
     const h = ctx.canvas.height / currentDPR;
-    
+
     ctx.strokeStyle = '#ddd';
     ctx.fillStyle = '#999';
     ctx.font = '10px Space Mono';
     ctx.lineWidth = 1;
     ctx.textAlign = 'center';
-    
+
     // Make coordinates integers for sharpness
     ctx.translate(0.5, 0.5);
 
@@ -1058,28 +1214,28 @@ function drawAxis(ctx, xMax, yMax, xLabel) { // Removed 'yLabel' unused
     for (let i = 0; i <= numNotches; i++) {
         const x = Math.round((i / numNotches) * w);
         const val = (i / numNotches) * xMax;
-        
+
         ctx.beginPath();
         ctx.moveTo(x, h);
         ctx.lineTo(x, h - 5);
         ctx.stroke();
-        
+
         // Label
         if (i % 2 === 0) { // Every other label
             let text = val.toFixed(1);
             // No unit suffix here as per request
-            
+
             // Adjust last label position to not be cut off
             if (i === numNotches) {
-                 ctx.textAlign = 'right';
-                 ctx.fillText(text, x - 2, h - 8);
+                ctx.textAlign = 'right';
+                ctx.fillText(text, x - 2, h - 8);
             } else {
-                 ctx.textAlign = 'center';
-                 ctx.fillText(text, x, h - 8);
+                ctx.textAlign = 'center';
+                ctx.fillText(text, x, h - 8);
             }
         }
     }
-    
+
     ctx.translate(-0.5, -0.5); // Reset
 }
 
@@ -1087,18 +1243,18 @@ function drawSignal(ctx, data, isRecon) {
     const currentDPR = window.devicePixelRatio || 1;
     const w = ctx.canvas.width / currentDPR;
     const h = ctx.canvas.height / currentDPR;
-    
+
     ctx.clearRect(0, 0, w, h);
-    
+
     const maxTime = state.timeBase;
-    
+
     // Scale Y (Fixed or Dynamic)
     const maxPossibleAmp = 5; // Roughly
-    const scaleY = (h / 2 - 20) / maxPossibleAmp; 
+    const scaleY = (h / 2 - 20) / maxPossibleAmp;
 
     // Axis
     drawAxis(ctx, maxTime, maxPossibleAmp, 's');
-    
+
     // Grid alignment
     ctx.translate(0.5, 0.5);
 
@@ -1106,8 +1262,8 @@ function drawSignal(ctx, data, isRecon) {
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, h/2);
-    ctx.lineTo(w, h/2);
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
     ctx.stroke();
 
     ctx.beginPath();
@@ -1119,10 +1275,10 @@ function drawSignal(ctx, data, isRecon) {
     for (let i = 0; i < data.length; i++) {
         const pt = data[i];
         if (pt.t > maxTime) break;
-        
+
         const x = (pt.t / maxTime) * w;
-        const y = h/2 - pt.val * scaleY;
-        
+        const y = h / 2 - pt.val * scaleY;
+
         if (!started) {
             ctx.moveTo(x, y);
             started = true;
@@ -1131,7 +1287,7 @@ function drawSignal(ctx, data, isRecon) {
         }
     }
     ctx.stroke();
-    
+
     ctx.translate(-0.5, -0.5);
 }
 
@@ -1139,17 +1295,17 @@ function drawSpectrum(ctx, data, N) {
     const currentDPR = window.devicePixelRatio || 1;
     const w = ctx.canvas.width / currentDPR;
     const h = ctx.canvas.height / currentDPR;
-    
+
     ctx.clearRect(0, 0, w, h);
-    
+
     // We only plot 0 to Fs/2
     const maxFreq = state.sampleRate / 2;
     // Actually our 'data' array has N entries, with freqs from 0 to Fs centered?
     // We populated 'freqs' with abs(f). It has N entries, with many duplicates (pos/neg).
     // Let's just plot the first N/2 + 1 indices which correspond to 0...Fs/2
-    
-    const plotData = data.slice(0, N/2);
-    
+
+    const plotData = data.slice(0, N / 2);
+
     // Axis
     drawAxis(ctx, maxFreq, 1, 'Hz');
 
@@ -1157,30 +1313,30 @@ function drawSpectrum(ctx, data, N) {
     ctx.beginPath();
     ctx.strokeStyle = 'rgba(20, 132, 230, 0.5)';
     ctx.lineWidth = 1;
-    
+
     if (state.filterType === 'square') {
-         const centerX = (state.filterCenter / maxFreq) * w;
-         const widthX = (state.filterWidth / maxFreq) * w;
-         ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
-         ctx.fillRect(centerX - widthX/2, 0, widthX, h); 
-         // Align stroke
-         ctx.translate(0.5, 0.5);
-         ctx.strokeRect(centerX - widthX/2, 0, widthX, h);
-         ctx.translate(-0.5, -0.5);
+        const centerX = (state.filterCenter / maxFreq) * w;
+        const widthX = (state.filterWidth / maxFreq) * w;
+        ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
+        ctx.fillRect(centerX - widthX / 2, 0, widthX, h);
+        // Align stroke
+        ctx.translate(0.5, 0.5);
+        ctx.strokeRect(centerX - widthX / 2, 0, widthX, h);
+        ctx.translate(-0.5, -0.5);
     } else {
         // Draw Gaussian Curve
         ctx.translate(0.5, 0.5);
         ctx.fillStyle = 'rgba(20, 132, 230, 0.1)';
         ctx.moveTo(0, h);
-        
-        for(let x=0; x<=w; x+=2) { 
-             const f = (x / w) * maxFreq;
-             const sigma = Math.max(0.1, state.filterWidth / 4);
-             const num = Math.pow(f - state.filterCenter, 2);
-             const den = 2 * Math.pow(sigma, 2);
-             const resp = Math.exp(-num / den);
-             const y = h - (resp * h);
-             ctx.lineTo(x, y);
+
+        for (let x = 0; x <= w; x += 2) {
+            const f = (x / w) * maxFreq;
+            const sigma = Math.max(0.1, state.filterWidth / 4);
+            const num = Math.pow(f - state.filterCenter, 2);
+            const den = 2 * Math.pow(sigma, 2);
+            const resp = Math.exp(-num / den);
+            const y = h - (resp * h);
+            ctx.lineTo(x, y);
         }
         ctx.lineTo(w, h);
         ctx.closePath();
@@ -1191,32 +1347,32 @@ function drawSpectrum(ctx, data, N) {
 
     // Draw Magnitude Bars
     ctx.beginPath();
-    const barWidth = w / (N/2);
-    const normalization = (N/2);
-    const maxVisibleAmp = 2.5; 
-    
+    const barWidth = w / (N / 2);
+    const normalization = (N / 2);
+    const maxVisibleAmp = 2.5;
+
     for (let i = 0; i < plotData.length; i++) {
         const d = plotData[i];
         const x = (d.f / maxFreq) * w;
-        
+
         const amp = d.mag / normalization;
         const barH = (amp / maxVisibleAmp) * h;
-        
+
         let inWindow = false;
-        if(state.filterType === 'square') {
-             inWindow = d.f >= (state.filterCenter - state.filterWidth/2) && 
-                         d.f <= (state.filterCenter + state.filterWidth/2);
+        if (state.filterType === 'square') {
+            inWindow = d.f >= (state.filterCenter - state.filterWidth / 2) &&
+                d.f <= (state.filterCenter + state.filterWidth / 2);
         } else {
-             // Visual threshold for Gaussian
-             const sigma = Math.max(0.1, state.filterWidth / 4);
-             const resp = Math.exp(-Math.pow(d.f - state.filterCenter, 2) / (2*sigma*sigma));
-             inWindow = resp > 0.1;
+            // Visual threshold for Gaussian
+            const sigma = Math.max(0.1, state.filterWidth / 4);
+            const resp = Math.exp(-Math.pow(d.f - state.filterCenter, 2) / (2 * sigma * sigma));
+            inWindow = resp > 0.1;
         }
-        
-        ctx.fillStyle = inWindow ? '#1484e6' : '#bbb'; 
+
+        ctx.fillStyle = inWindow ? '#1484e6' : '#bbb';
         ctx.fillRect(x, h - barH, Math.max(1, barWidth - 0.5), barH);
     }
-    
+
     ctx.translate(-0.5, -0.5);
 }
 
@@ -1229,40 +1385,40 @@ window.toggleAudio = (type) => {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    
+
     if (audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
 
     // Capture previous state BEFORE stop
     const wasPlayingType = isPlaying;
-    
+
     // Stop if currently playing
     if (isPlaying) {
         stopAudio();
     }
-    
+
     // If we just stopped the same type, return (toggle off)
     if (wasPlayingType === type) {
-        return; 
+        return;
     }
-    
+
     // Start New
     isPlaying = type;
     updatePlayButtons();
-    
+
     const buffer = generateAudioBuffer(type);
-    
+
     currentSource = audioCtx.createBufferSource();
     currentSource.buffer = buffer;
     currentSource.connect(audioCtx.destination);
-    
+
     // Set Start Time
     audioStartTime = audioCtx.currentTime;
-    
+
     currentSource.onended = () => {
         // Only if we are still the registered player (avoids race condition)
-        if (isPlaying === type) { 
+        if (isPlaying === type) {
             isPlaying = null;
             updatePlayButtons();
         }
@@ -1272,7 +1428,7 @@ window.toggleAudio = (type) => {
 
 function stopAudio() {
     if (currentSource) {
-        try { currentSource.stop(); } catch(e){}
+        try { currentSource.stop(); } catch (e) { }
         currentSource = null;
     }
     isPlaying = null;
@@ -1282,27 +1438,27 @@ function stopAudio() {
 function updatePlayButtons() {
     const btnOrig = document.getElementById('btn-play-original');
     const btnRecon = document.getElementById('btn-play-recon');
-    
-    if(btnOrig) {
+
+    if (btnOrig) {
         btnOrig.classList.remove('playing');
         const s = btnOrig.querySelector('span');
-        if(s) s.innerText = 'play_arrow';
+        if (s) s.innerText = 'play_arrow';
     }
-    if(btnRecon) {
+    if (btnRecon) {
         btnRecon.classList.remove('playing');
         const s = btnRecon.querySelector('span');
-        if(s) s.innerText = 'play_arrow';
+        if (s) s.innerText = 'play_arrow';
     }
-    
+
     if (isPlaying === 'original' && btnOrig) {
         btnOrig.classList.add('playing');
         const s = btnOrig.querySelector('span');
-        if(s) s.innerText = 'stop';
+        if (s) s.innerText = 'stop';
     }
     if (isPlaying === 'reconstructed' && btnRecon) {
         btnRecon.classList.add('playing');
         const s = btnRecon.querySelector('span');
-        if(s) s.innerText = 'stop';
+        if (s) s.innerText = 'stop';
     }
 }
 
@@ -1312,43 +1468,67 @@ function generateAudioBuffer(type) {
     const totalSamples = sr * duration;
     const buffer = audioCtx.createBuffer(1, totalSamples, sr);
     const data = buffer.getChannelData(0);
-    
+
     const K = state.audioMultiplier;
-    
+
     if (type === 'original') {
         for (let i = 0; i < totalSamples; i++) {
             const t = i / sr; // Audio Time
             let val = 0;
             state.components.forEach(comp => {
-                // Use getWaveValue with Audio Frequency (freq * K) and original phase
-                let compVal = comp.amp * getWaveValue(t, comp.freq * K, comp.phase || 0, comp.waveType || 'sine');
-                
-                if (state.signalMode === 'real') {
-                   if (t < comp.startTime || t > comp.endTime) {
-                       compVal = 0;
-                   } else {
-                       const dur = comp.endTime - comp.startTime;
-                       if (dur > 0.01) {
-                            const tNorm = (t - comp.startTime) / dur;
-                            compVal *= getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
-                       }
-                   }
+                let compVal = 0;
+
+                if (comp.isChirp) {
+                    // Chirp Audio
+                    if (state.signalMode === 'real') {
+                        if (t >= comp.startTime && t <= comp.endTime) {
+                            const dur = comp.endTime - comp.startTime;
+                            const dt = t - comp.startTime;
+                            if (dur > 0.0001) {
+                                const k = (comp.freqEnd - comp.freqStart) / dur;
+                                // Scale frequencies by K? NO, "freq * K" is done in getWaveValue.
+                                // We should scale start/end freq by K too.
+                                const phase = 2 * Math.PI * (comp.freqStart * K * dt + 0.5 * k * K * dt * dt) + (comp.phase || 0);
+                                // Envelope
+                                const tNorm = dt / dur;
+                                const env = getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                                compVal = comp.amp * Math.cos(phase) * env;
+                            }
+                        }
+                    }
+                } else {
+                    // Use getWaveValue with Audio Frequency (freq * K) and original phase
+                    compVal = comp.amp * getWaveValue(t, comp.freq * K, comp.phase || 0, comp.waveType || 'sine');
+
+                    if (state.signalMode === 'real') {
+                        if (t < comp.startTime || t > comp.endTime) {
+                            compVal = 0;
+                        } else {
+                            const dur = comp.endTime - comp.startTime;
+                            if (dur > 0.01) {
+                                const tNorm = (t - comp.startTime) / dur;
+                                compVal *= getEnvelopeValue(tNorm, comp.envelopeType, comp.envelopeParams);
+                            }
+                        }
+                    }
                 }
                 val += compVal;
             });
-            data[i] = Math.tanh(val * 0.5); 
+            data[i] = Math.tanh(val * 0.5);
         }
     } else {
         // Reconstructed Audio: Additive Synthesis Strategy
         // This avoids FFT bin artifacts ("pulsating") and accurately reflects the filter's effect on harmonic series.
-        
+
         // 1. Pre-calculate active harmonics for each component
         const activeHarmonics = [];
         state.components.forEach(comp => {
+            if (comp.isChirp) return; // Skip chirps for reconstructed audio (additive synthesis model)
+            
             // Get harmonic series (up to Nyquist of Audio Rate)
             const nyquist = sr / 2;
             const harmonics = getHarmonics(comp.freq * K, comp.waveType || 'sine', nyquist);
-            
+
             harmonics.forEach(h => {
                 // Calculate Filter Response for this harmonic
                 // Note: Filter operates in Visual Frequency domain.
@@ -1357,32 +1537,32 @@ function generateAudioBuffer(type) {
                 // Wait, h.freq is already scaled by K? Yes, getHarmonics takes baseFreq.
                 // So we need to reverse scale to check filter response.
                 const visualFreq = h.freq / K;
-                
+
                 let response = 0;
                 if (state.filterType === 'square') {
-                     if (visualFreq >= (state.filterCenter - state.filterWidth/2) && 
-                         visualFreq <= (state.filterCenter + state.filterWidth/2)) {
-                         response = 1;
-                     }
+                    if (visualFreq >= (state.filterCenter - state.filterWidth / 2) &&
+                        visualFreq <= (state.filterCenter + state.filterWidth / 2)) {
+                        response = 1;
+                    }
                 } else {
                     // Gaussian
-                    const sigma = Math.max(0.1, state.filterWidth / 4); 
+                    const sigma = Math.max(0.1, state.filterWidth / 4);
                     const num = Math.pow(visualFreq - state.filterCenter, 2);
                     const den = 2 * Math.pow(sigma, 2);
                     response = Math.exp(-num / den);
                 }
-                
+
                 // If response is significant, add to list
                 if (response > 0.001) {
                     activeHarmonics.push({
                         freq: h.freq, // Audio Freq
                         amp: comp.amp * h.amp * response,
                         phase: comp.phase || 0, // Fundamental phase shifts harmonics? 
-                                                // Yes, harmonic N has phase N*phi? 
-                                                // Actually for simple waves: sin(w*t + phi).
-                                                // Square = sin(x) + 1/3 sin(3x) + ...
-                                                // If x -> x+phi => sin(x+phi) + 1/3 sin(3(x+phi)) = sin(x+phi) + 1/3 sin(3x + 3phi)
-                                                // So harmonic N gets N*phi phase shift.
+                        // Yes, harmonic N has phase N*phi? 
+                        // Actually for simple waves: sin(w*t + phi).
+                        // Square = sin(x) + 1/3 sin(3x) + ...
+                        // If x -> x+phi => sin(x+phi) + 1/3 sin(3(x+phi)) = sin(x+phi) + 1/3 sin(3x + 3phi)
+                        // So harmonic N gets N*phi phase shift.
                         n: h.n,
                         // Component Reference for Envelope Logic
                         startTime: comp.startTime,
@@ -1398,35 +1578,35 @@ function generateAudioBuffer(type) {
         for (let i = 0; i < totalSamples; i++) {
             const t = i / sr;
             let val = 0;
-            
+
             for (let h of activeHarmonics) {
                 // Basic Osc
                 // Phase: The getHarmonics usually assumes sin(n*w*t).
                 // Phase shift: we must apply n * phase.
                 const angle = 2 * Math.PI * h.freq * t + (h.phase * h.n);
                 let oscVal = h.amp * Math.cos(angle); // Cosine base for consistency with getWaveValue default
-                
+
                 // Note: getHarmonics usually returns relative amps assuming Sine base?
                 // Let's ensure getHarmonics returns math consistent with 'cosine' or 'sine' base.
                 // Standard getWaveValue uses Math.cos(angle).
                 // Square: sign(cos(x)). Expansion of sign(cos(x)) is 4/pi * (cos(x) - 1/3 cos(3x) + 1/5 cos(5x)...)
                 // So alternating signs for cosine series of square wave.
-                
+
                 // Let's trust getHarmonics to handle sign/phase offsets if possible, 
                 // OR we just sum them. 
                 // If getHarmonics returns signed amplitude, we just use cos.
-                
+
                 // Real Mode Envelope
                 if (state.signalMode === 'real') {
-                   if (t < h.startTime || t > h.endTime) {
-                       oscVal = 0;
-                   } else {
-                       const dur = h.endTime - h.startTime;
-                       if (dur > 0.01) {
+                    if (t < h.startTime || t > h.endTime) {
+                        oscVal = 0;
+                    } else {
+                        const dur = h.endTime - h.startTime;
+                        if (dur > 0.01) {
                             const tNorm = (t - h.startTime) / dur;
                             oscVal *= getEnvelopeValue(tNorm, h.envelopeType, h.envelopeParams);
-                       }
-                   }
+                        }
+                    }
                 }
                 val += oscVal;
             }
@@ -1450,16 +1630,16 @@ window.exportComponents = () => {
 
 window.triggerImport = () => {
     const inp = document.getElementById('import-file');
-    if(inp) inp.click();
+    if (inp) inp.click();
 };
 
 window.importComponents = (input) => {
     const file = input.files[0];
     if (!file) return;
-    
+
     if (state.components.length > 0) {
         if (!confirm("This will replace all current signal components. Are you sure?")) {
-            input.value = ''; 
+            input.value = '';
             return;
         }
     }
@@ -1474,10 +1654,10 @@ window.importComponents = (input) => {
                     const n = new SignalComponent(c.freq || 1, c.amp || 1, c.phase || 0, c.waveType || 'sine');
                     n.id = c.id || Math.random().toString(36).substr(2, 9);
                     // Real mode params restoration
-                    if(c.startTime !== undefined) n.startTime = c.startTime;
-                    if(c.endTime !== undefined) n.endTime = c.endTime;
-                    if(c.envelopeType) n.envelopeType = c.envelopeType;
-                    if(c.envelopeParams) n.envelopeParams = c.envelopeParams;
+                    if (c.startTime !== undefined) n.startTime = c.startTime;
+                    if (c.endTime !== undefined) n.endTime = c.endTime;
+                    if (c.envelopeType) n.envelopeType = c.envelopeType;
+                    if (c.envelopeParams) n.envelopeParams = c.envelopeParams;
                     return n;
                 });
                 renderComponentsUI();
@@ -1490,22 +1670,22 @@ window.importComponents = (input) => {
         }
     };
     reader.readAsText(file);
-    input.value = ''; 
+    input.value = '';
 };
 
 function getHarmonics(freq, type, nyquist) {
     const harmonics = [];
     let n = 1;
-    
+
     // Safety
     if (freq <= 0) return [];
 
     while (freq * n < nyquist) {
         let amp = 0;
-        
+
         switch (type) {
             case 'sine':
-                if (n === 1) amp = 1; 
+                if (n === 1) amp = 1;
                 break;
             case 'square':
                 // Square (odd harmonics only): 4/pi * 1/n 
@@ -1517,11 +1697,11 @@ function getHarmonics(freq, type, nyquist) {
                 // So we use standard expansion: 1/n for odd n.
                 // Signs: cos(x) - 1/3 cos(3x) + 1/5 cos(5x) ...
                 if (n % 2 !== 0) {
-                     // Alternating signs: 1, -1, 1, -1 for n=1, 3, 5, 7
-                     // n=1 (idx0) -> +, n=3 (idx1) -> -, n=5 (idx2) -> +
-                     // ((n-1)/2) % 2 === 0 ? 1 : -1
-                     const sign = (((n - 1) / 2) % 2 === 0) ? 1 : -1;
-                     amp = (4 / Math.PI) * (1 / n) * sign;
+                    // Alternating signs: 1, -1, 1, -1 for n=1, 3, 5, 7
+                    // n=1 (idx0) -> +, n=3 (idx1) -> -, n=5 (idx2) -> +
+                    // ((n-1)/2) % 2 === 0 ? 1 : -1
+                    const sign = (((n - 1) / 2) % 2 === 0) ? 1 : -1;
+                    amp = (4 / Math.PI) * (1 / n) * sign;
                 }
                 break;
             case 'triangle':
@@ -1550,11 +1730,11 @@ function getHarmonics(freq, type, nyquist) {
                 amp = (2 / Math.PI) * (1 / n);
                 break;
         }
-        
+
         if (amp !== 0) {
             harmonics.push({ n, freq: freq * n, amp });
         }
-        
+
         n++;
         // Limit to reasonable number to avoid performance hit (e.g. 50? or full spectra?)
         // 50 x 3 comps = 150 oscs. Safe.
@@ -1570,26 +1750,26 @@ function drawSignalNew(ctx, data, isRecon, pbTime = null) {
     const currentDPR = window.devicePixelRatio || 1;
     const w = ctx.canvas.width / currentDPR;
     const h = ctx.canvas.height / currentDPR;
-    
+
     // Clear
     ctx.clearRect(0, 0, w, h);
-    
+
     // Zoom/Pan State
     const tStart = state.zoomStart;
     const tEnd = state.zoomEnd;
     const tRange = tEnd - tStart;
-    
+
     // Safety
     if (tRange <= 0.0001) return;
 
     // Scale Y (Fixed or Dynamic)
-    const maxPossibleAmp = 5; 
-    const scaleY = (h / 2 - 20) / maxPossibleAmp; 
+    const maxPossibleAmp = 5;
+    const scaleY = (h / 2 - 20) / maxPossibleAmp;
 
     // Axis
     // We need a smart axis drawer that knows about start/end
     drawAxisNew(ctx, tStart, tEnd, maxPossibleAmp, 's');
-    
+
     // Grid alignment
     ctx.translate(0.5, 0.5);
 
@@ -1597,8 +1777,8 @@ function drawSignalNew(ctx, data, isRecon, pbTime = null) {
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, h/2);
-    ctx.lineTo(w, h/2);
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
     ctx.stroke();
 
     if (!data || data.length === 0) {
@@ -1608,23 +1788,23 @@ function drawSignalNew(ctx, data, isRecon, pbTime = null) {
 
     ctx.beginPath();
     ctx.strokeStyle = isRecon ? '#1484e6' : '#1a1a1a';
-    ctx.lineWidth = 2; 
+    ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
 
     // Optimization: Find start index
     // Data is sorted by time usually? Yes, generated sequentially.
     // dt = 5 / 2048 typically. 
     // We can just iterate or binary search. Iteration is fast enough for 2048 points.
-    
+
     let started = false;
     for (let i = 0; i < data.length; i++) {
         const pt = data[i];
         if (pt.t < tStart - 0.1) continue; // Margin
         if (pt.t > tEnd + 0.1) break;      // Margin
-        
+
         const x = ((pt.t - tStart) / tRange) * w;
-        const y = h/2 - pt.val * scaleY;
-        
+        const y = h / 2 - pt.val * scaleY;
+
         if (!started) {
             ctx.moveTo(x, y);
             started = true;
@@ -1638,56 +1818,56 @@ function drawSignalNew(ctx, data, isRecon, pbTime = null) {
     if (pbTime !== null && pbTime >= tStart && pbTime <= tEnd) {
         const x = ((pbTime - tStart) / tRange) * w;
         ctx.beginPath();
-        ctx.strokeStyle = '#000'; 
+        ctx.strokeStyle = '#000';
         ctx.lineWidth = 1.5;
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
         ctx.stroke();
     }
-    
+
     ctx.translate(-0.5, -0.5);
 }
 
 function drawAxisNew(ctx, tStart, tEnd, yMax, unit) {
-     if (!state.showAxis) return;
-     const currentDPR = window.devicePixelRatio || 1;
-     const w = ctx.canvas.width / currentDPR;
-     const h = ctx.canvas.height / currentDPR;
-     
-     ctx.strokeStyle = '#ddd';
-     ctx.fillStyle = '#999';
-     ctx.font = '10px Space Mono';
-     ctx.lineWidth = 1;
-     ctx.textAlign = 'center';
-     
-     ctx.translate(0.5, 0.5);
-     
-     const range = tEnd - tStart;
-     const numNotches = 5;
-     
-     for (let i=0; i<=numNotches; i++) {
-         const t = tStart + (i/numNotches)*range;
-         const x = (i/numNotches)*w;
-         
-         ctx.beginPath();
-         ctx.moveTo(x, h);
-         ctx.lineTo(x, h-5);
-         ctx.stroke();
-         
-         ctx.fillText(t.toFixed(2), x, h-8);
-         // Skip y-axis labels for now to keep clean
-     }
-     ctx.translate(-0.5, -0.5);
+    if (!state.showAxis) return;
+    const currentDPR = window.devicePixelRatio || 1;
+    const w = ctx.canvas.width / currentDPR;
+    const h = ctx.canvas.height / currentDPR;
+
+    ctx.strokeStyle = '#ddd';
+    ctx.fillStyle = '#999';
+    ctx.font = '10px Space Mono';
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
+
+    ctx.translate(0.5, 0.5);
+
+    const range = tEnd - tStart;
+    const numNotches = 5;
+
+    for (let i = 0; i <= numNotches; i++) {
+        const t = tStart + (i / numNotches) * range;
+        const x = (i / numNotches) * w;
+
+        ctx.beginPath();
+        ctx.moveTo(x, h);
+        ctx.lineTo(x, h - 5);
+        ctx.stroke();
+
+        ctx.fillText(t.toFixed(2), x, h - 8);
+        // Skip y-axis labels for now to keep clean
+    }
+    ctx.translate(-0.5, -0.5);
 }
 
 function setupCanvasInteractions(canvas) {
-    if(!canvas) return;
-    
+    if (!canvas) return;
+
     // Mouse
     canvas.addEventListener('mousedown', startDrag);
     window.addEventListener('mousemove', drag);
     window.addEventListener('mouseup', endDrag);
-    
+
     // Touch
     canvas.addEventListener('touchstart', (e) => startDrag(e.touches[0]));
     window.addEventListener('touchmove', (e) => drag(e.touches[0]));
@@ -1695,77 +1875,77 @@ function setupCanvasInteractions(canvas) {
 
     // Wheel (Zoom)
     canvas.addEventListener('wheel', handleWheel, { passive: false });
-    
+
     function startDrag(e) {
         // Only if target is canvas
-        if (e.target !== canvas && e instanceof MouseEvent) return; 
+        if (e.target !== canvas && e instanceof MouseEvent) return;
         // For touch, e is Touch object which doesn't have target same way?
         // Actually e.target is fine.
-        
+
         state.isDragging = true;
         const rect = canvas.getBoundingClientRect();
         state.dragStartX = (e.clientX - rect.left);
         state.dragStartTime = state.zoomStart;
         state.dragRange = state.zoomEnd - state.zoomStart;
-        state.dragLastX = state.dragStartX; 
+        state.dragLastX = state.dragStartX;
     }
-    
+
     function drag(e) {
         if (!state.isDragging) return;
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const w = rect.width;
-        
+
         const dxPixels = x - state.dragLastX;
         state.dragLastX = x;
-        
+
         const range = state.zoomEnd - state.zoomStart;
         // pixelToTime = range / w
         const dt = -(dxPixels / w) * range;
-        
+
         let newStart = state.zoomStart + dt;
         let newEnd = state.zoomEnd + dt;
-        
+
         // Clamp 0..5
         if (newStart < 0) {
-             newStart = 0;
-             newEnd = range;
+            newStart = 0;
+            newEnd = range;
         }
         if (newEnd > 5) {
-             newEnd = 5;
-             newStart = 5 - range;
+            newEnd = 5;
+            newStart = 5 - range;
         }
-        
+
         state.zoomStart = newStart;
         state.zoomEnd = newEnd;
     }
-    
+
     function endDrag() {
         state.isDragging = false;
     }
-    
+
     function handleWheel(e) {
         e.preventDefault();
         const rect = canvas.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const w = rect.width;
-        
+
         const tHover = state.zoomStart + (mouseX / w) * (state.zoomEnd - state.zoomStart);
-        
+
         const zoomSpeed = 0.1;
         const factor = e.deltaY > 0 ? (1 + zoomSpeed) : (1 - zoomSpeed);
-        
+
         let newRange = (state.zoomEnd - state.zoomStart) * factor;
-        
+
         // Clamp Range
         if (newRange < 0.1) newRange = 0.1;
         if (newRange > 5.0) newRange = 5.0;
-        
+
         // Adjust start/end to keep tHover fixed
         const ratio = (mouseX / w);
         let newStart = tHover - newRange * ratio;
         let newEnd = tHover + newRange * (1 - ratio);
-        
+
         // Clamp Boundary
         if (newStart < 0) {
             newStart = 0;
@@ -1785,25 +1965,25 @@ function setupCanvasInteractions(canvas) {
 window.updateDisplaySegment = (type, value) => {
     value = parseFloat(value);
     const MAX = 5.0;
-    
+
     if (type === 'start') {
         if (value >= state.zoomEnd) {
-             state.zoomEnd = Math.min(value + 0.1, MAX);
-             if (state.zoomEnd === MAX) {
-                 if (value > MAX - 0.1) value = MAX - 0.1;
-             }
+            state.zoomEnd = Math.min(value + 0.1, MAX);
+            if (state.zoomEnd === MAX) {
+                if (value > MAX - 0.1) value = MAX - 0.1;
+            }
         }
         state.zoomStart = value;
     } else {
         if (value <= state.zoomStart) {
-             state.zoomStart = Math.max(value - 0.1, 0);
-             if (state.zoomStart === 0) {
-                 if (value < 0.1) value = 0.1;
-             }
+            state.zoomStart = Math.max(value - 0.1, 0);
+            if (state.zoomStart === 0) {
+                if (value < 0.1) value = 0.1;
+            }
         }
         state.zoomEnd = value;
     }
-    
+
     // Sync UI visually (fill, label, other slider)
     updateDisplaySliders();
 };
@@ -1813,19 +1993,19 @@ function updateDisplaySliders() {
     const endInput = document.getElementById('display-end-input');
     const fill = document.getElementById('display-segment-fill');
     const label = document.getElementById('display-segment-label');
-    
+
     if (startInput && endInput && fill && label) {
         // Update input values if they aren't the focused element (avoid jitter while dragging)
         if (document.activeElement !== startInput) startInput.value = state.zoomStart;
         if (document.activeElement !== endInput) endInput.value = state.zoomEnd;
-        
+
         const MAX = 5.0;
         const left = (state.zoomStart / MAX) * 100;
         const width = ((state.zoomEnd - state.zoomStart) / MAX) * 100;
-        
+
         fill.style.left = left + '%';
         fill.style.width = width + '%';
-        
+
         label.innerText = `Display Segment (${state.zoomStart.toFixed(2)}s - ${state.zoomEnd.toFixed(2)}s)`;
     }
 }
@@ -1833,13 +2013,13 @@ function updateDisplaySliders() {
 function init() {
     setupCanvasInteractions(elements.canvases.signal);
     setupCanvasInteractions(elements.canvases.recon);
-    
+
     loadState();
     updateToggleUI();
     renderComponentsUI();
     setupListeners();
     updateDisplaySliders(); // Init Sync
-    
+
     animate();
 }
 
